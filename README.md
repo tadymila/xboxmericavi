@@ -26,6 +26,9 @@ Shadowed areas are still black (the game's ray-traced lighting does not run yet,
 
 <img width="2467" height="1390" alt="Screenshot_1" src="https://github.com/user-attachments/assets/85913f19-714a-45b1-bacf-2df74e6d6e7a" />
 
+<img width="1143" height="662" alt="image" src="https://github.com/user-attachments/assets/a7a8be17-a72e-4a06-89f0-7160e6a1f43e" />
+
+
 *Prologue, xboxmericavi-turbo.cmd: 212.9 ms/frame (~5 fps), 4378 draws/frame, i7-9700F + RTX 5070 Ti.*
 
 

@@ -21,6 +21,11 @@ Tested on: **Intel i7-9700F** (no Zen 2 instructions, emulated), **RTX 5070 Ti 1
 
 Shadowed areas are still black (the game's ray-traced lighting does not run yet, see `docs/fork-ray-tracing.md`).
 
+<img width="2467" height="1390" alt="Screenshot_1" src="https://github.com/user-attachments/assets/85913f19-714a-45b1-bacf-2df74e6d6e7a" />
+
+*Prologue, xboxmericavi-turbo.cmd: 212.9 ms/frame (~5 fps), 4378 draws/frame, i7-9700F + RTX 5070 Ti.*
+
+
 ## What this fork adds
 
 - **Texture staging budget per frame is configurable** (`crates/victory-gpu/src/draw.rs`):

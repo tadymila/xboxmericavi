@@ -22,6 +22,7 @@ echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 if not exist "%LOCALAPPDATA%\victory" mkdir "%LOCALAPPDATA%\victory"
+start "xboxmericavi stats" "%~dp0xboxmericavi-stats.cmd" xboxmericavi-turbo.log
 echo Starting (%PRESET%)... log: %LOCALAPPDATA%\victory\xboxmericavi-turbo.log
 target\release\victory.exe run "%GAME_EXE%" --execute > "%LOCALAPPDATA%\victory\xboxmericavi-turbo.log" 2>&1
 echo.

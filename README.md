@@ -1,4 +1,4 @@
-<p align="center"><img src="branding/icon.svg" width="160" alt="xboxmericavi"></p>
+<p align="center"><img src="branding/logo-chill.svg" width="220" alt="xboxmericavi"></p>
 
 # xboxmericavi
 

@@ -231,13 +231,19 @@ pub(crate) fn psv(p: &Psv) -> Vec<u8> {
         }
     }
     // Names of arbitrary semantics (system values use ""), then indices.
+    // xboxmericavi: a mesh shader's signatures get their own string offset
+    // for every occurrence (repeated `TEXCOORD` included), as the SDK
+    // validator expects; shared offsets failed its PSV check on three
+    // character pre-skin mesh shaders (victory-fork #12). Other stages keep
+    // sharing equal names.
+    let unshared = p.mesh.is_some();
     let mut strings = vec![0u8];
     let mut indices: Vec<u32> = Vec::new();
     let mut elements = Vec::new();
     for e in p.inputs.iter().chain(p.outputs).chain(p.prims) {
         let name = if e.kind == 0 {
             let needle: Vec<u8> = e.name.bytes().chain([0]).collect();
-            match find(&strings, &needle) {
+            match (!unshared).then(|| find(&strings, &needle)).flatten() {
                 Some(at) => at,
                 None => {
                     strings.extend(&needle);

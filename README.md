@@ -14,10 +14,13 @@ Not playable yet, but the prologue is reachable and controllable.
 
 Tested on: **Intel i7-9700F** (no Zen 2 instructions, emulated), **RTX 5070 Ti 16 GB**, 64 GB RAM, Windows 11, game 1.0.2.1 (Series X profile).
 
-| | upstream defaults | upstream fast switches | **xboxmericavi MAX** |
-|---|---|---|---|
-| Opening cutscene / prologue, ms per frame | 1200–1700 | 380–690 | **150–225** |
-| Frame rate in the world | ~1 fps | ~1.5–3 fps | **4.5–6.5 fps** |
+| | upstream defaults | upstream fast switches | xboxmericavi MAX | **xboxmericavi TURBO** |
+|---|---|---|---|---|
+| Prologue (cell / corridor), ms per frame | 1200–1700 | 380–690 | 290–325 | **207–227** |
+| Frame rate in the world | ~1 fps | ~1.5–3 fps | ~3 fps | **4–5 fps** |
+
+Measured 2026-11-24 with a warm shader cache, 4,000–5,000 draws/frame. Recommended launcher: `xboxmericavi-turbo.cmd`.
+`VICTORY_WIDE_MERGE=1` was tested on top of TURBO and **breaks rendering** (cell walls disappear, ~2,500 draws/frame) – do not use it.
 
 Shadowed areas are still black (the game's ray-traced lighting does not run yet, see `docs/fork-ray-tracing.md`).
 

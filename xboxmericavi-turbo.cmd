@@ -18,8 +18,16 @@ set VICTORY_JOIN_COPIES=1
 set VICTORY_UNWATCHED_FRAMES=2
 set VICTORY_CARD_REHASH_RUNS=1
 set VICTORY_LATE_WAIT_LISTS=256
-set VICTORY_RELAY_MERGE_THREADS=1
-set VICTORY_REALIGN_VIEWS=1
+rem New in victory-fork d510ee4 (upstream: ~6 -> 10 fps in the first rooms):
+set VICTORY_ASYNC_SUBMIT=1
+set VICTORY_QUEUE2=1
+set VICTORY_JOIN_PARTS=1
+set VICTORY_BACK_OWN_VIEW=1
+set VICTORY_INDIRECT_WINDOW=1
+set VICTORY_INDIRECT_GATHER=1
+set VICTORY_COPY_PLAIN=1
+rem xboxmericavi: Intel CPUs lack mwaitx; patch it to pause instead of ~280k exceptions a second.
+set VICTORY_MWAITX_NATIVE=1
 echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)

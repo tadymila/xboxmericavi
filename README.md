@@ -65,9 +65,9 @@ The launcher remembers your path and preset (`%LOCALAPPDATA%\victory\xboxmericav
 - **GUI launcher** (`tools/launcher.ps1`).
 - **Relay timing split** in the log (`xboxmericavi relay split per frame: fetch ... CPU merge ... rest ...`).
 - **Mesh PSV string fix** from victory-fork #12.
-- Experiments, **off by default**, kept for others to build on:
-  - `VICTORY_RELAY_MERGE_THREADS=N`: merge fetched pieces on N threads (no gain measured: the cost is kernel calls, not threads).
-  - `VICTORY_REALIGN_VIEWS=1`: typed buffer views off their copy's elements get an aligned copy filled on the card each frame instead of a null view. Works (205 copies, lighting intact) but does **not** fix the missing cell walls.
+- **`VICTORY_MWAITX_NATIVE=1`** (on in TURBO): the game waits for its frame fence with AMD's `monitorx`/`mwaitx`, which Intel CPUs lack, so every spin of that wait was an emulated exception (~280,000 a second, measured upstream). The two are now patched in place to `nop`/`pause` the first time they fault, as upstream already does for `clwb`.
+- **TURBO uses upstream's newest speed switches** (victory-fork d510ee4): `ASYNC_SUBMIT`, `QUEUE2`, `JOIN_PARTS`, `BACK_OWN_VIEW`, `INDIRECT_WINDOW` + `INDIRECT_GATHER`, `COPY_PLAIN`.
+- Experiment, **off by default**: `VICTORY_DESC_AS_DATA=1` (a descriptor read as data gets its table offset; 6 more pixel shaders translate).
 
 ## Findings (what limits the speed)
 

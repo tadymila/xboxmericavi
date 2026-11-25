@@ -23,6 +23,10 @@ Tested on: **Intel i7-9700F** (8C/8T, no Zen 2 instructions, emulated), **RTX 50
 ¹ MAX: 150–225 ms in earlier runs, 290–325 ms on a first run (shaders still compiling). TURBO: warm shader cache, 4,000–6,500 draws/frame.
 Every build change makes the next launch translate all ~3,000 shaders again: **measure on the second launch.**
 
+<img width="2529" height="1414" alt="image" src="https://github.com/user-attachments/assets/99656005-9257-4621-8d1c-0b30ab36d7e9" />
+
+*Lucia's cell with the yard outside, TURBO: 252 ms/frame (4 fps), 4898 draws/frame, i7-9700F + RTX 5070 Ti.*
+
 <img width="2467" height="1390" alt="Screenshot_1" src="https://github.com/user-attachments/assets/85913f19-714a-45b1-bacf-2df74e6d6e7a" />
 
 *Prologue, TURBO: 212.9 ms/frame (~5 fps), 4378 draws/frame, i7-9700F + RTX 5070 Ti.*

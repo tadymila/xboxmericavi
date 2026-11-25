@@ -2598,6 +2598,12 @@ impl Shadow {
     /// a copy has no other use for), as [`Shadow::merge_under_writes`].
     /// `title` is scratch memory. Returns the bytes written to title
     /// memory.
+    /// Where the title buffer starts (xboxmericavi: the relay's parallel
+    /// merge groups pieces by the title addresses they cover).
+    pub(crate) fn title_start(&self) -> usize {
+        self.start as usize
+    }
+
     pub(crate) fn card_merge_relay(&self, at: usize, gpu: &[u8], fetched_after: u64, title: &mut Vec<u8>) -> usize {
         let start = self.start as usize;
         let Some(card) = &self.card else {

@@ -1762,6 +1762,15 @@ pub(crate) fn late_free_present() -> bool {
 /// the compare before it, however late the pieces are fetched; the fetch
 /// goes to the queue under [`QUEUE_ORDER`], which says which sends of
 /// title bytes the card had received when it ran.
+/// xboxmericavi: threads the relay merges fetched pieces on
+/// (`VICTORY_RELAY_MERGE_THREADS`, default 1: one, as upstream).
+fn relay_merge_threads() -> usize {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VICTORY_RELAY_MERGE_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1).clamp(1, 16)
+    })
+}
+
 pub(crate) fn relay() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| late_stage() > 0 && crate::shadow::relay())
@@ -1799,7 +1808,7 @@ static QUEUE_ORDER: Mutex<u64> = Mutex::new(0);
 /// ([`relay`]): landings, flights landed, microseconds it waited for the
 /// card with nothing to land, microseconds it waited for fetches of card
 /// copies' pieces, microseconds of landing in all.
-static RELAY_STATS: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+static RELAY_STATS: [std::sync::atomic::AtomicU64; 7] = [const { std::sync::atomic::AtomicU64::new(0) }; 7];
 
 /// Of the line's things in order (a flight: the value signalled on the
 /// host's fence behind it; a write or a signal behind a flight: `None`):
@@ -2505,6 +2514,14 @@ fn late_line(frames: f64) {
             r[2] / 1000.0,
             r[3] / 1000.0,
             r[4] / 1000.0,
+        );
+        tracing::info!(
+            "xboxmericavi relay split per frame: fetch (card copy + wait) {:.1} ms, CPU merge of {:.0} pieces {:.1} ms, \
+             rest of landing {:.1} ms",
+            r[3] / 1000.0,
+            r[6],
+            r[5] / 1000.0,
+            (r[4] - r[3] - r[5]) / 1000.0,
         );
     }
     if late_exact() {
@@ -3339,13 +3356,81 @@ impl Host {
         }
         let mut title = Vec::new();
         let mut written = 0;
-        for (shadow, lo, hi, at) in &pieces {
-            // SAFETY: the mapping of the fetched bytes, `total` of them;
-            // the copy into it has run.
-            let gpu = unsafe { std::slice::from_raw_parts((data + *at as usize) as *const u8, hi - lo) };
-            written += shadow.card_merge_relay(*lo, gpu, after, &mut title);
+        // xboxmericavi: time the CPU side of the merge (compare with the
+        // copy, read and write title memory), apart from the fetch above.
+        let merging = std::time::Instant::now();
+        let threads = relay_merge_threads();
+        if threads <= 1 || pieces.len() < 64 {
+            for (shadow, lo, hi, at) in &pieces {
+                // SAFETY: the mapping of the fetched bytes, `total` of them;
+                // the copy into it has run.
+                let gpu = unsafe { std::slice::from_raw_parts((data + *at as usize) as *const u8, hi - lo) };
+                written += shadow.card_merge_relay(*lo, gpu, after, &mut title);
+            }
+        } else {
+            // xboxmericavi: pieces whose title addresses overlap (copies of
+            // aliased buffers) form one group and stay on one thread in
+            // their order; groups share no byte of title memory, so they
+            // merge side by side.
+            let mut order: Vec<usize> = (0..pieces.len()).collect();
+            let span = |i: usize| {
+                let (shadow, lo, hi, _) = &pieces[i];
+                (shadow.title_start() + lo, shadow.title_start() + hi)
+            };
+            order.sort_by_key(|&i| span(i));
+            let mut groups: Vec<Vec<usize>> = Vec::new();
+            let mut end = 0usize;
+            for i in order {
+                let (a, b) = span(i);
+                match groups.last_mut() {
+                    Some(g) if a < end => {
+                        g.push(i);
+                        end = end.max(b);
+                    }
+                    _ => {
+                        groups.push(vec![i]);
+                        end = b;
+                    }
+                }
+            }
+            for g in &mut groups {
+                g.sort_unstable();
+            }
+            // Deal groups out by bytes, biggest first.
+            groups.sort_by_key(|g| std::cmp::Reverse(g.iter().map(|&i| pieces[i].2 - pieces[i].1).sum::<usize>()));
+            let mut loads: Vec<(usize, Vec<usize>)> = vec![(0, Vec::new()); threads];
+            for g in groups {
+                let bytes: usize = g.iter().map(|&i| pieces[i].2 - pieces[i].1).sum();
+                let w = loads.iter_mut().min_by_key(|l| l.0).expect("threads > 1");
+                w.0 += bytes;
+                w.1.extend(g);
+            }
+            let pieces = &pieces;
+            written = std::thread::scope(|scope| {
+                let jobs: Vec<_> = loads
+                    .into_iter()
+                    .filter(|l| !l.1.is_empty())
+                    .map(|(_, mut list)| {
+                        scope.spawn(move || {
+                            list.sort_unstable();
+                            let mut title = Vec::new();
+                            let mut n = 0;
+                            for i in list {
+                                let (shadow, lo, hi, at) = &pieces[i];
+                                // SAFETY: as above; each piece is read by one thread.
+                                let gpu = unsafe { std::slice::from_raw_parts((data + *at as usize) as *const u8, hi - lo) };
+                                n += shadow.card_merge_relay(*lo, gpu, after, &mut title);
+                            }
+                            n
+                        })
+                    })
+                    .collect();
+                jobs.into_iter().map(|j| j.join().unwrap_or(0)).sum()
+            });
         }
         COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
+        RELAY_STATS[5].fetch_add(merging.elapsed().as_micros() as u64, Ordering::Relaxed);
+        RELAY_STATS[6].fetch_add(pieces.len() as u64, Ordering::Relaxed);
         // Sends up to `after` are of no use to any later merge.
         crate::shadow::relay_fetched(after);
     }

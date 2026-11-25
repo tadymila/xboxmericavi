@@ -2738,6 +2738,59 @@ pub(crate) fn spans() -> Vec<(u64, u64, bool)> {
 /// The copy of the innermost title buffer holding `[address, address +
 /// len)`, made on first use. A `len` of 0 or 1 is an ask without a length
 /// (a root view: the caller reads on to the copy's end).
+/// xboxmericavi: copies of their own for typed buffer views whose start is
+/// not on an element of the copy they would otherwise use (an
+/// `R32G32B32_FLOAT` view 12 bytes wide at offset 21,737,552, say), so that
+/// the host can make the view instead of leaving it null and the shader
+/// reading zeros: missing walls and ceilings (victory-fork #62). Keyed by
+/// the buffer the view is of (start, bytes), as `buffer_copy` looks it up,
+/// and brought up to date from title memory like any copy.
+static REALIGNED: Mutex<BTreeMap<(u64, u64), Arc<Shadow>>> = Mutex::new(BTreeMap::new());
+
+/// The aligned copy [`realign`] made for the buffer at `address`, if any.
+pub(crate) fn realigned(address: u64, len: u64) -> Option<Arc<Shadow>> {
+    REALIGNED.lock().unwrap_or_else(|e| e.into_inner()).get(&(address, len)).cloned()
+}
+
+/// A copy of title memory `[address, address + len)` that starts at
+/// `address`, made once and kept (at most 1 GiB of them in all).
+pub(crate) fn realign(address: u64, len: u64) -> Option<Arc<Shadow>> {
+    // Small buffers (a few hundred bytes: per-light and per-pass data the
+    // card itself writes) are left out: their copy refreshed from title
+    // memory alone went stale and the lighting black (run of 2026-11-25,
+    // 784 such copies). `VICTORY_REALIGN_MIN_KB`, 64 by default.
+    static MIN: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let min = *MIN.get_or_init(|| {
+        std::env::var("VICTORY_REALIGN_MIN_KB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(64) << 10
+    });
+    if len < min || len > 256 << 20 {
+        return None;
+    }
+    let mut map = REALIGNED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(shadow) = map.get(&(address, len)) {
+        return Some(shadow.clone());
+    }
+    let total: u64 = map.values().map(|s| s.len).sum();
+    if total + len > 1 << 30 {
+        tracing::warn!(start = format_args!("{address:#x}"), len, total, "no more aligned view copies");
+        return None;
+    }
+    let size = len.next_multiple_of(1 << 16);
+    let (buffer, data) = host()?.shared_buffer(size)?;
+    crate::host::name(&buffer, || format!("aligned view copy {address:#x}+{len:#x}"));
+    // SAFETY: a live buffer.
+    let gpu = unsafe { buffer.GetGPUVirtualAddress() };
+    let shadow = Arc::new(Shadow::new(buffer, data, gpu, address, len));
+    tracing::info!(
+        start = format_args!("{address:#x}"),
+        len,
+        copies = map.len() + 1,
+        "a typed buffer view off its copy's elements gets an aligned copy of its own"
+    );
+    map.insert((address, len), shadow.clone());
+    Some(shadow)
+}
+
 pub(crate) fn find(address: u64, len: u64) -> Option<Arc<Shadow>> {
     lookup(address, len, false)
 }

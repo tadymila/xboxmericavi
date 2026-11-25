@@ -1468,6 +1468,19 @@ pub(crate) fn buffer_copy(view: &View) -> Option<(std::sync::Arc<crate::shadow::
     if len == 0 {
         return None;
     }
+    // xboxmericavi: a shader view `buffer_srv` made on an aligned copy of its
+    // own is brought up to date there.
+    let words: Option<&[u32; 10]> = match view {
+        View::Shader(_, Some(desc)) => Some(desc),
+        View::Placed(false, resource, desc) if resource[0] == 1 => desc[..10].try_into().ok(),
+        _ => None,
+    };
+    if let Some(words) = words
+        && let Some((base, width)) = buffer_extent(view)
+        && let Some(own) = realigned_copy(base, width, words)
+    {
+        return Some((own, address, len));
+    }
     if view_extent()
         && let Some((base, width)) = buffer_extent(view)
         // (The console is lax: a view may begin past its buffer's end.)
@@ -1559,6 +1572,33 @@ fn buffer_view_ok(format: DXGI_FORMAT, first: u64, count: u32, stride: u32, raw:
             .is_some_and(|end| end <= width)
 }
 
+/// xboxmericavi: whether typed buffer views off their copy's elements get
+/// an aligned copy of their own (`VICTORY_REALIGN_VIEWS=1`; off by default,
+/// such views are left null as upstream does).
+fn realign_views() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_REALIGN_VIEWS").is_some_and(|v| v == "1"))
+}
+
+/// The aligned copy a shader view of the buffer at `base` (`width` bytes)
+/// was made on, deciding as [`buffer_srv`] does.
+fn realigned_copy(base: u64, width: u64, words: &[u32; 10]) -> Option<std::sync::Arc<crate::shadow::Shadow>> {
+    if !realign_views() {
+        return None;
+    }
+    let desc = srv_desc(words);
+    if desc.Format == DXGI_FORMAT_UNKNOWN {
+        return None;
+    }
+    let element = element_size(&desc);
+    let shadow = crate::shadow::find(base, width)?;
+    let offset = shadow.offset(base);
+    if element == 0 || offset % element == 0 {
+        return None;
+    }
+    crate::shadow::realigned(base, width)
+}
+
 fn buffer_srv(
     address: u64,
     len: u64,
@@ -1583,6 +1623,19 @@ fn buffer_srv(
         };
     }
     let element = element_size(&desc);
+    // xboxmericavi: a typed view off its copy's elements reads an aligned
+    // copy of its own buffer instead of a null view (`realigned_copy`).
+    let (shadow, offset) = if window.is_none()
+        && element != 0
+        && offset % element != 0
+        && realign_views()
+        && let Some(own) = crate::shadow::realign(address, len)
+    {
+        let at = own.offset(address);
+        (own, at)
+    } else {
+        (shadow, offset)
+    };
     // SAFETY: a buffer view's union member.
     let buffer = unsafe { &mut desc.Anonymous.Buffer };
     if window.is_none() {

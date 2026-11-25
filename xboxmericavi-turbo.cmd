@@ -18,7 +18,8 @@ set VICTORY_JOIN_COPIES=1
 set VICTORY_UNWATCHED_FRAMES=2
 set VICTORY_CARD_REHASH_RUNS=1
 set VICTORY_LATE_WAIT_LISTS=256
-set VICTORY_RELAY_MERGE_THREADS=4
+set VICTORY_RELAY_MERGE_THREADS=1
+set VICTORY_REALIGN_VIEWS=1
 echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)

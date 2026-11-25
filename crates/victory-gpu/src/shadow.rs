@@ -1565,17 +1565,20 @@ pub(crate) fn window_use() -> [u64; 8] {
 /// The next read of that memory makes a new copy and copies the window
 /// again. Called before a submission starts, by the thread that submits.
 pub(crate) fn let_go_idle() {
-    const IDLE_MS: u64 = 10_000;
     const IDLE_FRAMES: u64 = 4;
     let gone: Vec<Arc<Shadow>> = {
         // Held from the look to the removal: `loose` hands a copy out
         // under the same lock, so none is handed out in between.
         let mut map = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
+        if map.is_empty() {
+            return;
+        }
+        let idle_ms = crate::host::ram_idle_ms(crate::host::available_physical_ram());
         let idle: Vec<(u64, u64)> = map
             .iter()
             .filter(|(_, s)| {
                 Arc::strong_count(s) == 1
-                    && crate::host::long_ago(s.used.load(Ordering::Relaxed), IDLE_MS, IDLE_FRAMES)
+                    && crate::host::long_ago(s.used.load(Ordering::Relaxed), idle_ms, IDLE_FRAMES)
                     && crate::host::references(&s.buffer) == 1
             })
             .map(|(key, _)| *key)
@@ -2747,7 +2750,13 @@ pub(crate) fn spans() -> Vec<(u64, u64, bool)> {
 /// and brought up to date from title memory like any copy.
 static REALIGNED: Mutex<BTreeMap<(u64, u64), Arc<Shadow>>> = Mutex::new(BTreeMap::new());
 
+/// Every aligned copy [`realign`] made, by the buffer it is of.
+pub(crate) fn realigned_all() -> Vec<((u64, u64), Arc<Shadow>)> {
+    REALIGNED.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (*k, v.clone())).collect()
+}
+
 /// The aligned copy [`realign`] made for the buffer at `address`, if any.
+#[allow(dead_code)]
 pub(crate) fn realigned(address: u64, len: u64) -> Option<Arc<Shadow>> {
     REALIGNED.lock().unwrap_or_else(|e| e.into_inner()).get(&(address, len)).cloned()
 }
@@ -2755,13 +2764,14 @@ pub(crate) fn realigned(address: u64, len: u64) -> Option<Arc<Shadow>> {
 /// A copy of title memory `[address, address + len)` that starts at
 /// `address`, made once and kept (at most 1 GiB of them in all).
 pub(crate) fn realign(address: u64, len: u64) -> Option<Arc<Shadow>> {
-    // Small buffers (a few hundred bytes: per-light and per-pass data the
-    // card itself writes) are left out: their copy refreshed from title
-    // memory alone went stale and the lighting black (run of 2026-11-25,
-    // 784 such copies). `VICTORY_REALIGN_MIN_KB`, 64 by default.
+    // Filled from title memory, the 784 small copies of the first run
+    // (per-light and per-pass data the card itself writes) went stale and
+    // the lighting black; they are now filled on the card from the copy
+    // they come from. `VICTORY_REALIGN_MIN_KB` (0 by default) leaves out
+    // smaller buffers.
     static MIN: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     let min = *MIN.get_or_init(|| {
-        std::env::var("VICTORY_REALIGN_MIN_KB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(64) << 10
+        std::env::var("VICTORY_REALIGN_MIN_KB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) << 10
     });
     if len < min || len > 256 << 20 {
         return None;
@@ -2897,8 +2907,8 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
     entry.shadow.clone()
 }
 
-/// Titles also use memory outside any buffer object as GPU memory (Grand
-/// Theft Auto VI's interface vertices, from its own allocator). Such memory
+/// Titles also use memory outside any buffer object as GPU memory (
+/// the title's interface vertices, from its own allocator). Such memory
 /// gets copies of the aligned windows it touches.
 /// A window nothing names any more is let go ([`let_go_idle`]).
 /// shortcut: a window is 4 MiB however little of it is read (the memory

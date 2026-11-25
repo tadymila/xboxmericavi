@@ -133,11 +133,9 @@ pub const DEFAULT_LOOP_LIMIT: u32 = lower::LOOP_LIMIT;
 pub fn loop_limit() -> u32 {
     static LIMIT: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
-        if cfg!(feature = "diagnostics") {
-            parse_loop_limit(std::env::var("VICTORY_SHADER_LOOP_LIMIT").ok().as_deref())
-        } else {
-            lower::LOOP_LIMIT
-        }
+        // xboxmericavi (as VItoriaBr): `VICTORY_SHADER_LOOP_LIMIT` in any
+        // build, not only with `diagnostics`; unset keeps the default.
+        parse_loop_limit(std::env::var("VICTORY_SHADER_LOOP_LIMIT").ok().as_deref())
     })
 }
 

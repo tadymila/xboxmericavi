@@ -43,7 +43,7 @@ while ($true) {
             copies = [double]$g[4].Value; tex = [double]$g[5].Value; gpu = [double]$g[6].Value
             back = [double]$g[7].Value; backmb = [double]$g[8].Value; draws = [int]$g[9].Value; dropped = [int]$g[10].Value
         }
-        if ($s.draws -lt 50) { continue }   # loading screens and menus
+        if ($s.draws -lt 1000) { continue }   # loading screens, menus, video (under 1000 draws)
         $samples.Add($s); $got = $true
         if ($samples.Count -gt $History) { $samples.RemoveAt(0) }
         ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}" -f (Get-Date -Format s), $s.fps, $s.ms, $s.prep, $s.copies, $s.tex, $s.gpu, $s.back, $s.backmb, $s.draws, $s.dropped) | Add-Content $csv

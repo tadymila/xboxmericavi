@@ -5665,6 +5665,21 @@ impl<'a> Lower<'a> {
                 }
                 return Ok(());
             }
+            // xboxmericavi: `VICTORY_DESC_AS_DATA=1` lets such a load stand in
+            // as its place in the table, as a lane-copied one does above, so
+            // the program translates and its draws are not dropped (six pixel
+            // programs in the prologue cell). What the code does with the
+            // dwords as numbers then sees table offsets, not the console's
+            // descriptor bits. Off by default; part of the shader cache key.
+            if std::env::var_os("VICTORY_DESC_AS_DATA").is_some_and(|v| v == "1")
+                && let Some(a) = self.scalar.get(&site).copied()
+            {
+                for k in 0..count {
+                    let x = self.s.m.i32(a.offset / 4 + k);
+                    self.write(inst, Reg::S(code + k as u8), x, None);
+                }
+                return Ok(());
+            }
             if std::env::var_os("VICTORY_DESC_WHY").is_some() {
                 eprintln!(
                     "DESC-WHY {:#x} {} scalar={:?} lane_copied={}",

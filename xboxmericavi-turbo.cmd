@@ -14,6 +14,8 @@ set VICTORY_CARD_BUFFERS_MB=1024
 set VICTORY_TEXTURE_FRAME_MS=80
 set VICTORY_TEXTURE_FRAME_MB=64
 set VICTORY_TEXTURE_NO_WAIT=1
+rem xboxmericavi: no 3x texture budget during a backlog (it took 240 ms of the frame; textures take about a minute longer to load).
+set VICTORY_TEXTURE_CATCHUP=0
 set VICTORY_JOIN_COPIES=1
 set VICTORY_UNWATCHED_FRAMES=2
 set VICTORY_CARD_REHASH_RUNS=1
@@ -26,8 +28,6 @@ set VICTORY_BACK_OWN_VIEW=1
 set VICTORY_INDIRECT_WINDOW=1
 set VICTORY_INDIRECT_GATHER=1
 set VICTORY_COPY_PLAIN=1
-rem xboxmericavi: Intel CPUs lack mwaitx; patch it to pause instead of ~280k exceptions a second.
-set VICTORY_MWAITX_NATIVE=1
 echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)

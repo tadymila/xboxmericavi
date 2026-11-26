@@ -59,6 +59,7 @@ The launcher remembers your path and preset (`%LOCALAPPDATA%\victory\xboxmericav
 - **TURBO preset**: card hash passes joined into runs, 256 lists in flight, high CPU priority.
 - **Live stats window** (`tools/stats.ps1`): fps, frame-time graph, per-frame breakdown, CSV export. Loading screens and menus (under 1,000 draws) are left out of the averages.
 - **GUI launcher** (`tools/launcher.ps1`).
+- **Own icon in `victory.exe`** (`branding/icon.ico`, put in by `apps/victory/build.rs` as a resource, no extra tool or crate).
 - **Relay timing split** in the log (`xboxmericavi relay split per frame: fetch ... CPU merge ... rest ...`).
 - **Mesh PSV string fix** from victory-fork #12.
 - **AMD-only CPU instructions patched in place on Intel** (from avatarmanz/VIctory-7900XTX, on by default): the frame wait's `monitorx`/`mwaitx` become `nop`/`pause` and the title's `clzero` loops jump to the same loop with plain stores, so they stop raising exceptions (hundreds of thousands a second on an Intel CPU). `VICTORY_PATCH_WAITS=0` / `VICTORY_PATCH_CLZERO=0` emulate them as before.

@@ -188,6 +188,7 @@ fn build(
         root_srvs: lowered.root_srvs,
         root_uavs: lowered.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
+        half_views: lowered.half_views,
     };
     if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
         let mut copy = shader.dxil.clone();
@@ -655,6 +656,25 @@ fn a_descriptor_of_numbers_is_title_memory_read_through_the_directory() {
         let (shader, _) = build(wide, WHOLE).expect("lowers through the directory");
         assert!(shader.root_srvs.contains(&super::SLOT_MEMORY));
         assert!(shader.root_uavs.contains(&super::SLOT_FAULTS));
+    }
+}
+
+/// With `VICTORY_BVH_NO_HIT=1` a node test over title memory lowers and
+/// validates, and reads nothing: the program asks the host neither for the
+/// directory of title memory nor for the list of pages it found no copy
+/// of, which it does without the switch (the test above).
+#[test]
+fn a_node_test_that_answers_no_hit_reads_nothing() {
+    for wide in [true, false] {
+        super::lower::intersect::TEST_NO_HIT.set(true);
+        let built = build(wide, WHOLE);
+        super::lower::intersect::TEST_NO_HIT.set(false);
+        let (shader, _) = built.expect("lowers with no hit");
+        assert!(!shader.root_srvs.contains(&super::SLOT_MEMORY));
+        assert!(!shader.root_uavs.contains(&super::SLOT_FAULTS));
+        // And with it off again, as before.
+        let (shader, _) = build(wide, WHOLE).expect("lowers through the directory");
+        assert!(shader.root_srvs.contains(&super::SLOT_MEMORY));
     }
 }
 

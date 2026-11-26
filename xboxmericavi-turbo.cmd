@@ -28,6 +28,15 @@ set VICTORY_BACK_OWN_VIEW=1
 set VICTORY_INDIRECT_WINDOW=1
 set VICTORY_INDIRECT_GATHER=1
 set VICTORY_COPY_PLAIN=1
+rem New in victory-fork 52ac4ec, each measured upstream:
+rem   preparing thread -9 ms, flights settle later -20 ms, texture pass on its own thread (+40% frames), lookup cache -14 ms
+set VICTORY_PARALLEL_REFRESH=1
+set VICTORY_SETTLE_ROOM=1
+set VICTORY_HEAP_WORKER=1
+set VICTORY_LOOKUP_CACHE=1
+rem   water lit and boats float (the first boat mission fails without it)
+rem off: suspected of the loading crash of 26 Nov (writes textures back into title memory)
+rem set VICTORY_TEXTURE_BACK=1
 echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)

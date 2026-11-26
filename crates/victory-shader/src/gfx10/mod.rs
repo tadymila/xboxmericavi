@@ -334,6 +334,27 @@ fn isa(offset: usize, reason: &'static str) -> ShaderError {
 mod tests {
     use super::*;
 
+    /// `VICTORY_DECODE=<file>` (+ `VICTORY_DECODE_WAVE64=1`): the GFX10
+    /// instructions of a raw code file (device methods 0x1c8 / 0x218 dumps).
+    /// `cargo test -p victory-shader --lib -- --ignored decode_raw_file --nocapture`
+    #[test]
+    #[ignore]
+    fn decode_raw_file() {
+        let Some(path) = std::env::var_os("VICTORY_DECODE") else {
+            return;
+        };
+        let code = std::fs::read(path).unwrap_or_default();
+        let wave64 = std::env::var_os("VICTORY_DECODE_WAVE64").is_some();
+        match decode(&code) {
+            Ok(list) => {
+                for i in list {
+                    println!("{:06x}: {}", i.offset, i.text(wave64));
+                }
+            }
+            Err(e) => println!("not decodable: {e}"),
+        }
+    }
+
     const S_ENDPGM: u32 = 0xBF81_0000;
     /// s_branch / s_cbranch_scc0 with a dword offset relative to the next instruction.
     const fn sopp(op: u32, simm16: i16) -> u32 {

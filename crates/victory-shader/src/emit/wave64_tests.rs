@@ -132,6 +132,7 @@ fn lowered_on(
         root_srvs: lowered.root_srvs,
         root_uavs: lowered.root_uavs,
         root_indexed_views: res.root_indexed_views,
+        half_views: lowered.half_views,
     })
 }
 
@@ -420,6 +421,11 @@ fn a_wave_or_inside(skip: u32, name: &str) {
 /// Runs `shader` on the hardware device with the root constants `s0`, `s1` and gives dword 0
 /// of the UAV; None (and a line) without a device that takes it.
 fn on_the_card(shader: &HostShader, constants: [u32; 2]) -> Option<u32> {
+    whole_uav(shader, constants, 1).map(|out| out[0])
+}
+
+/// As [`on_the_card`], and gives the first `dwords` dwords of the UAV.
+fn whole_uav(shader: &HostShader, constants: [u32; 2], dwords: u32) -> Option<Vec<u32>> {
     let Ok(host) = Host::new(false) else {
         eprintln!("no SM 6.6 hardware device; not run");
         return None;
@@ -440,13 +446,13 @@ fn on_the_card(shader: &HostShader, constants: [u32; 2]) -> Option<u32> {
             &pso,
             &Dispatch {
                 roots: vec![(0, Root::Constants(ud))],
-                views: &[View::RawUav(1)],
+                views: &[View::RawUav(dwords)],
                 samplers: &[],
                 groups: [1, 1, 1],
             },
         )
         .unwrap_or_else(|e| panic!("dispatch failed: {e}"));
-    Some(out[0][0])
+    Some(out[0].clone())
 }
 
 /// A 32-lane console wave. A register holds a lane mask on one path (the lanes below s0)
@@ -529,4 +535,373 @@ fn scc_of_a_mask_operation_joined_with_a_scalar_test_needs_the_skip_wave_wide() 
         assert_eq!(got, expected, "{below} lanes inside, s1 = {s1}");
     }
     eprintln!("ran on the hardware device: the inner test's SCC for every lane once some lane is inside");
+}
+
+/// Fork pull request #646 (mynzjerko): a spilled 64-thread wave64 compute program, as the
+/// structure builder's, dispatched by a `DispatchX` that counts threads
+/// (`USER_DISPATCH_THREADS`). It stores `(bit count of EXEC on entry, wave OR of
+/// 1 << (lane >> 1))` at `uav[lane * 2..]` from every lane. The threads at or past the count
+/// must store nothing and count in neither; 0 is no count (all 64). On a host of 64-lane
+/// waves they leave at entry; on one of 32 (both halves exchange) they stay, left out of the
+/// ballot, the reduction and the store, and no barrier hangs with an empty upper half.
+#[test]
+fn threads_past_a_dispatch_x_count_do_nothing() {
+    let mut words = vec![
+        // The spilled table's descriptor-table offset (user data 16) from s[0:1] + 0.
+        0x8703_FF01,
+        0x0000_00FF, // s_and_b32 s3, s1, 0xff
+        0xBE82_0300, // s_mov_b32 s2, s0
+        0x3D << 26 | 4 << 6 | 1,
+        125 << 25,   // s_load_dword s4, s[2:3], 0
+        0xBE85_0380, // s_mov_b32 s5, 0
+        0x3D << 26 | 0x02 << 18 | 8 << 6 | 2,
+        125 << 25,   // s_load_dwordx4 s[8:11], s[4:5], 0
+        0xBE86_107E, // s_bcnt1_i32_b64 s6, exec
+        0x7E0A_0281, // v_mov_b32 v5, 1
+        0x2C0C_0081, // v_lshrrev_b32 v6, 1, v0
+        0x340E_0B06, // v_lshlrev_b32 v7, v6, v5
+    ];
+    words.extend_from_slice(&super::wave::WAVE_OR_V7_TO_S7);
+    words.extend_from_slice(&[
+        0x3402_0083, // v_lshlrev_b32 v1, 3, v0 (8 bytes a lane)
+        0x7E04_0206, // v_mov_b32 v2, s6
+        0x7E06_0207, // v_mov_b32 v3, s7
+        0x38 << 26 | 0x1D << 18 | 1 << 12,
+        0x80 << 24 | 2 << 16 | 2 << 8 | 1, // buffer_store_dwordx2 v[2:3], v1, s[8:11], 0 offen
+        S_ENDPGM,
+    ]);
+    let native = NativeProgram {
+        stage: HwStage::Cs,
+        wave64: true,
+        vgprs: 16,
+        layout: vec![RootParam {
+            root: RootType::Table,
+            table_offset_dwords: 0,
+            sgprs: 1,
+            base_register: 0,
+            user_data: 16,
+            slot: 0,
+        }],
+        used: vec![UsedResource {
+            kind: ResourceType::Uav,
+            root: RootType::Table,
+            table_offset_dwords: 0,
+            lower_bound: 0,
+            stride: 0,
+            dwords: 4,
+            user_data: 16,
+            slot: 0,
+        }],
+        io: StageIo::Cs(ComputeIo {
+            rsrc2: 2 << 1, // s[0:1]: the spilled table's pointer
+            threads: [64, 1, 1],
+        }),
+        code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+    };
+    assert!(crate::spill::is_spilled(&native));
+    let p = crate::spill::build(&native).expect("spill::build");
+    let st = structure::structure(&p).expect("structure");
+    let res = resource::track(&p, &native.layout, native.stage, Some(&st)).expect("resource::track");
+    let io = io::raise(&p, &native).expect("io::raise");
+    let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let host = Host::new(false).ok();
+    let counts = RootType::Other(super::USER_DISPATCH_THREADS);
+    for host_wave in [64u32, 32] {
+        let was = lower::TEST_HOST_WAVE.replace(Some(host_wave));
+        let lowered = lower::lower(&lower::Parts {
+            native: &native,
+            p: &p,
+            st: &st,
+            io: &io,
+            res: &res,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            prims: Vec::new(),
+            mesh_stride: 0,
+        });
+        lower::TEST_HOST_WAVE.set(was);
+        let lowered = lowered.unwrap_or_else(|e| panic!("lower (waves of {host_wave}): {e}"));
+        assert!(
+            lowered.user_data.iter().any(|u| u.root == counts && u.dword == 0),
+            "waves of {host_wave}: the program does not take the thread count of x"
+        );
+        let shader = HostShader {
+            stage: HwStage::Cs,
+            dxil: lowered.dxil,
+            user_data: lowered.user_data,
+            samplers: lowered.samplers,
+            static_samplers: Vec::new(),
+            root_cbvs: lowered.root_cbvs,
+            root_srvs: lowered.root_srvs,
+            root_uavs: lowered.root_uavs,
+            root_indexed_views: res.root_indexed_views.clone(),
+            half_views: lowered.half_views,
+        };
+        if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
+            let mut copy = shader.dxil.clone();
+            v.validate(&mut copy).unwrap_or_else(|e| panic!("DXIL validation failed (waves of {host_wave}): {e}"));
+        }
+        let Some(host) = host.as_ref() else { continue };
+        let Ok((root, pso)) = host.compute_pipeline(&shader) else {
+            eprintln!("the hardware device does not take the waves-of-{host_wave} form; not run");
+            continue;
+        };
+        // (count, threads that run, their wave OR: bits 0..ceil(n / 2))
+        for (count, active, or) in [(45u32, 45usize, 0x007F_FFFFu32), (1, 1, 1), (0, 64, u32::MAX)] {
+            let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+            for u in shader.user_data.iter().filter(|u| u.root == counts && u.dword == 0) {
+                ud[u.index as usize] = count;
+            }
+            let out = host
+                .dispatch(
+                    &root,
+                    &pso,
+                    &Dispatch {
+                        roots: vec![(0, Root::Constants(ud))],
+                        views: &[View::RawUav(128)],
+                        samplers: &[],
+                        groups: [1, 1, 1],
+                    },
+                )
+                .unwrap_or_else(|e| panic!("dispatch failed (waves of {host_wave}, count {count}): {e}"));
+            for lane in 0..64 {
+                let got = (out[0][lane * 2], out[0][lane * 2 + 1]);
+                let expected = if lane < active { (active as u32, or) } else { (0, 0) };
+                assert_eq!(got, expected, "waves of {host_wave}, count {count}, lane {lane}");
+            }
+        }
+        eprintln!("ran on the hardware device (waves of {host_wave}): counts 45, 1 and none exact");
+    }
+}
+
+/// A wave64 program of 128 threads (two console waves) that leaves early when no lane of its
+/// wave is below s0, as the console's compiler does when the end of the program is too far for
+/// a branch: `s_cbranch_execnz` over a far jump to the end. `extra` are words that go into the
+/// far jump's block before it, and `work_at_end` puts an instruction between the jump's target
+/// and the end of the program. Then the gate: every thread stores 1, or 2 when some lane of its
+/// console wave that is still running has the thread number s1 (the lanes that fail a test).
+fn far_early_out(extra: &[u32], work_at_end: bool) -> NativeProgram {
+    let gate = [
+        0x7D84_0001, // v_cmp_eq_u32 vcc, s1, v0
+        0xBE90_106A, // s_bcnt1_i32_b64 s16, vcc
+        0xBF06_8010, // s_cmp_eq_u32 s16, 0
+        0x8511_8281, // s_cselect_b32 s17, 1, 2
+        0x7E02_0211, // v_mov_b32 v1, s17
+        0x3404_0082, // v_lshlrev_b32 v2, 2, v0
+        0x38 << 26 | 0x1C << 18 | 1 << 12,
+        0x80 << 24 | 2 << 16 | 1 << 8 | 2, // buffer_store_dword v1, v2, s[8:11], 0 offen
+    ];
+    let jump = [
+        0xBE8E_1F00, // s_getpc_b64 s[14:15]
+        0x800E_FF0E,
+        4 * (4 + gate.len() as u32), // s_add_u32 s14, s14, the way to the end
+        0x820F_800F, // s_addc_u32 s15, s15, 0
+        0xBE80_200E, // s_setpc_b64 s[14:15]
+    ];
+    let mut words = vec![
+        0x7D88_0000, // v_cmp_gt_u32 vcc, s0, v0
+        0xBE8C_246A, // s_and_saveexec_b64 s[12:13], vcc
+        0xBF89_0000 | (extra.len() + jump.len()) as u32, // s_cbranch_execnz over the jump
+    ];
+    words.extend_from_slice(extra);
+    words.extend_from_slice(&jump);
+    words.extend_from_slice(&gate);
+    if work_at_end {
+        words.push(0x7E06_0281); // v_mov_b32 v3, 1
+    }
+    native_of(&words, true, 128)
+}
+
+fn branches_named(p: &ir::Program, name: &str) -> usize {
+    p.blocks.iter().filter(|b| b.insts.last().is_some_and(|i| i.name() == name)).count()
+}
+
+/// What the gate of [`far_early_out`] stores in each of 128 threads.
+fn gate_expected(below: u32, failing: u32) -> Vec<u32> {
+    (0..128u32)
+        .map(|t| {
+            let some_fail = failing < below && failing / 64 == t / 64;
+            match (t < below, some_fail) {
+                (false, _) => 0,
+                (true, false) => 1,
+                (true, true) => 2,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn a_far_early_out_is_left_out_and_the_gate_counts_the_lanes_of_both_halves() {
+    let native = far_early_out(&[], false);
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    assert_eq!(branches_named(&p, "s_cbranch_execnz"), 1);
+    lower::take_needs();
+    let kept = lowered(&native, &p, &HashSet::new());
+    assert!(
+        matches!(&kept, Err(ShaderError::Unsupported { what, .. }) if what.ends_with("where not every lane runs")),
+        "{:?}",
+        kept.err()
+    );
+    for (name, form) in [("early-outs", ir::without_early_outs(&p)), ("skips", ir::without_skips(&p, false))] {
+        let form = form.unwrap_or_else(|| panic!("without {name}: the far early-out stays"));
+        assert_eq!(branches_named(&form, "s_cbranch_execnz"), 0, "without {name}");
+    }
+    let form = ir::without_early_outs(&p).expect("left out");
+    let shader = lowered(&native, &form, &HashSet::new()).expect("lower");
+    if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
+        let mut copy = shader.dxil.clone();
+        v.validate(&mut copy).expect("DXIL validation failed");
+    }
+    let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    // (threads below s0 are in bounds; the one thread s1 fails the test) A failing thread of the
+    // upper half gives 2 to the lower half's threads as well, and a failing thread out of
+    // bounds counts for nothing
+    for (below, failing) in [(128u32, 40u32), (128, 100), (128, 63), (40, 50), (40, 10), (33, 32), (1, 0), (0, 5)] {
+        let Some(got) = whole_uav(&shader, [below, failing], 128) else { return };
+        assert_eq!(got, gate_expected(below, failing), "{below} threads in bounds, thread {failing} fails");
+    }
+    eprintln!("ran on the hardware device: the gate's count over both halves of each console wave");
+}
+
+#[test]
+fn a_far_jump_that_does_work_is_not_an_early_out() {
+    // work in the jump's block, and work between the jump's target and the end
+    for (name, native) in [
+        ("work in the jump", far_early_out(&[0xBE94_0385], false)), // s_mov_b32 s20, 5
+        ("work at the target", far_early_out(&[], true)),
+    ] {
+        let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+        assert_eq!(branches_named(&p, "s_cbranch_execnz"), 1, "{name}");
+        assert!(ir::without_early_outs(&p).is_none(), "{name}");
+        assert!(ir::without_skips(&p, false).is_none(), "{name}");
+        assert!(ir::without_skips(&p, true).is_none(), "{name}");
+    }
+}
+
+/// `if (t < s0) { park s[20:21]; if (s1 == 0) {..} else {..}; take it back }` and a read of
+/// s[20:21] after the join, as the console's compiler leaves a parked scalar across an inner
+/// branch. `then` is the inner branch's first arm; the second one leaves the parked scalar alone.
+fn parked_across_an_inner_branch(then: u32) -> ir::Program {
+    let body = [
+        0xBE96_0414, // s_mov_b64 s[22:23], s[20:21]
+        0xBF06_8001, // s_cmp_eq_u32 s1, 0
+        0xBF85_0002, // s_cbranch_scc1 to the second arm
+        then,
+        0xBF82_0001, // s_branch to the join
+        0xBE98_0382, // s_mov_b32 s24, 2
+        0xBE94_0416, // s_mov_b64 s[20:21], s[22:23]
+    ];
+    let mut words = vec![
+        0xBE94_0406, // s_mov_b64 s[20:21], s[6:7]
+        0x7D88_0000, // v_cmp_gt_u32 vcc, s0, v0
+        0xBE8C_246A, // s_and_saveexec_b64 s[12:13], vcc
+        0xBF88_0000 | body.len() as u32, // s_cbranch_execz past the body
+    ];
+    words.extend_from_slice(&body);
+    words.extend_from_slice(&[
+        0xBEFE_040C, // s_mov_b64 exec, s[12:13]
+        0x7E02_0214, // v_mov_b32 v1, s20
+    ]);
+    let native = native(&words);
+    ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build")
+}
+
+#[test]
+fn a_skip_whose_parked_scalars_pass_an_inner_branch_unchanged_is_left_out() {
+    let p = parked_across_an_inner_branch(0xBE96_0314); // s_mov_b32 s22, s20
+    assert_eq!(branches_named(&p, "s_cbranch_execz"), 1);
+    // (s22 comes back through a phi of the inner join whose two arguments are copies of one
+    // value: only `deep` follows it)
+    assert!(ir::without_skips(&p, false).is_none());
+    let deep = ir::without_skips(&p, true).expect("left out");
+    assert_eq!(branches_named(&deep, "s_cbranch_execz"), 0);
+}
+
+#[test]
+fn a_skip_whose_parked_scalar_an_inner_branch_changes_is_kept() {
+    let p = parked_across_an_inner_branch(0xBE96_0387); // s_mov_b32 s22, 7
+    assert_eq!(branches_named(&p, "s_cbranch_execz"), 1);
+    assert!(ir::without_skips(&p, false).is_none());
+    assert!(ir::without_skips(&p, true).is_none());
+}
+
+/// `v_writelane_b32 vN, sX, K`.
+fn writelane(n: u32, x: u32, lane: u32) -> Vec<u32> {
+    vec![0xD761_0000 | n, (128 + lane) << 9 | x]
+}
+
+/// `v_readlane_b32 sX, vN, K`.
+fn readlane(x: u32, n: u32, lane: u32) -> Vec<u32> {
+    vec![0xD760_0000 | x, (128 + lane) << 9 | (256 + n)]
+}
+
+fn parked(words: &[Vec<u32>]) -> ir::Program {
+    let native = native(&words.concat());
+    ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build")
+}
+
+fn instructions<'a>(p: &'a ir::Program, name: &str) -> Vec<&'a ir::Inst> {
+    p.blocks.iter().flat_map(|b| &b.insts).filter(|i| i.name() == name).collect()
+}
+
+fn regs<T>(of: &[(ir::Reg, T)]) -> Vec<ir::Reg> {
+    of.iter().map(|r| r.0).collect()
+}
+
+#[test]
+fn a_pair_parked_in_lanes_that_hold_other_scalars_elsewhere_moves_as_a_pair() {
+    // s[20:21] goes into lanes 4 and 5 of v10 and comes back into s[22:23]; later lane 4
+    // holds s30 for a while: no lane of the two is the pair's alone
+    let p = parked(&[
+        writelane(10, 20, 4),
+        writelane(10, 21, 5),
+        vec![0x7E04_0281], // v_mov_b32 v2, 1
+        readlane(22, 10, 4),
+        readlane(23, 10, 5),
+        writelane(10, 30, 4),
+        readlane(31, 10, 4),
+    ]);
+    let wide = instructions(&p, "s_mov_b64");
+    let [save, restore] = wide[..] else { panic!("one pair save and one pair restore: {} moves", wide.len()) };
+    assert_eq!(regs(&save.reads), [ir::Reg::S(20), ir::Reg::S(21)]);
+    assert_eq!(regs(&restore.writes), [ir::Reg::S(22), ir::Reg::S(23)]);
+    assert_eq!(regs(&restore.reads), regs(&save.writes));
+    // the single scalar has its own lane register, not the pair's
+    let narrow = instructions(&p, "s_mov_b32");
+    let lone_save = narrow.iter().find(|i| regs(&i.reads) == [ir::Reg::S(30)]).expect("the save of s30");
+    let lone_restore = narrow.iter().find(|i| regs(&i.writes) == [ir::Reg::S(31)]).expect("the restore into s31");
+    assert_eq!(regs(&lone_restore.reads), regs(&lone_save.writes));
+    assert!(regs(&lone_save.writes).iter().all(|r| !regs(&save.writes).contains(r)));
+}
+
+#[test]
+fn a_parked_pair_another_save_or_restore_shares_stays_two_scalars() {
+    let cases = [
+        (
+            "a lone restore of the lane",
+            vec![
+                writelane(10, 20, 4),
+                writelane(10, 21, 5),
+                readlane(22, 10, 4),
+                readlane(23, 10, 5),
+                readlane(24, 10, 4),
+            ],
+        ),
+        (
+            "another save of the lane on one path to the restore",
+            vec![
+                writelane(10, 20, 4),
+                writelane(10, 21, 5),
+                vec![0xBF06_8001, 0xBF85_0002], // s_cmp_eq_u32 s1, 0 and s_cbranch_scc1 over the save
+                writelane(10, 30, 4),
+                readlane(22, 10, 4),
+                readlane(23, 10, 5),
+            ],
+        ),
+    ];
+    for (name, words) in cases {
+        let p = parked(&words);
+        assert!(instructions(&p, "s_mov_b64").is_empty(), "{name}");
+        assert!(!instructions(&p, "s_mov_b32").is_empty(), "{name}");
+    }
 }

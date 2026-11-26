@@ -457,6 +457,26 @@ fn translate(
         Ok(p) => p,
         Err(e) => return t.fail(e.to_string(), example),
     };
+    // `VICTORY_NATIVE_HEADS=<file>`: each native program's first 36 bytes
+    // (the console compiler's `v_nop` header carries its hash) with the
+    // container's line, appended: to match the raw code device methods 0x1c8
+    // / 0x218 are handed against the containers.
+    if let Some(path) = std::env::var_os("VICTORY_NATIVE_HEADS") {
+        use std::io::Write as _;
+        let mut text = String::new();
+        for n in &programs {
+            let head: String = n.code.iter().take(160).map(|b| format!("{b:02x}")).collect();
+            text.push_str(&format!("{head}	{}	{}
+", n.code.len(), example()));
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = f.write_all(text.as_bytes());
+        }
+        // `VICTORY_HEADS_ONLY=1`: the list alone, nothing translated.
+        if std::env::var_os("VICTORY_HEADS_ONLY").is_some() {
+            return;
+        }
+    }
     // `VICTORY_FAIL_DUMP=<dir>`: the first 3 containers of each failure reason, as the title
     // has them (`.cdxil`), to work on a translator gap offline
     let dump = std::env::var_os("VICTORY_FAIL_DUMP");

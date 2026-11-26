@@ -263,6 +263,15 @@ fn submit_cut(this: This, lists: &[This]) {
     } else {
         0
     };
+    // A frame shot learns that its frame's lists are being submitted.
+    #[cfg(feature = "diagnostics")]
+    if crate::shot::recording() {
+        for &l in lists {
+            if let Some(h) = crate::list::host_list(l) {
+                crate::shot::submitted(h);
+            }
+        }
+    }
     #[cfg(feature = "diagnostics")]
     crate::capture::op(this as usize, || {
         let named: Vec<String> = lists
@@ -344,6 +353,15 @@ fn submit_split(this: This, lists: &[This]) {
     } else {
         0
     };
+    // A frame shot learns that its frame's lists are being submitted.
+    #[cfg(feature = "diagnostics")]
+    if crate::shot::recording() {
+        for &l in lists {
+            if let Some(h) = crate::list::host_list(l) {
+                crate::shot::submitted(h);
+            }
+        }
+    }
     #[cfg(feature = "diagnostics")]
     crate::capture::op(this as usize, || {
         let named: Vec<String> = lists
@@ -365,6 +383,12 @@ fn submit_split(this: This, lists: &[This]) {
             .filter_map(|&l| crate::list::host_list(l))
             .collect();
         host.execute(&now);
+        // They have run: their descriptor tables' slots are free again, as
+        // in `submit_cut` (which does this after the same call, for the
+        // same reason: the lists are not detached here, so nothing else
+        // gives their fresh tables' dynamic slots back before the title
+        // resets them).
+        crate::list::tables_done(&lists[..cut]);
     }
     if cut < lists.len() {
         static SEEN: AtomicU64 = AtomicU64::new(0);
@@ -669,7 +693,7 @@ fn send_joined(joined: &mut Joined) {
         let sent = JOINED[1].fetch_add(1, Ordering::Relaxed) + 1;
         JOINED[2].fetch_add(order.len() as u64, Ordering::Relaxed);
         JOINED[3].fetch_add(joined.signals.len() as u64, Ordering::Relaxed);
-        if sent % 2048 == 0 {
+        if sent.is_multiple_of(2048) {
             let n: Vec<u64> = JOINED.iter().map(|n| n.swap(0, Ordering::Relaxed)).collect();
             tracing::info!(
                 "parts joined (VICTORY_JOIN_PARTS=1): {} parts went to the host in {} submissions ({:.1} parts, {:.1} lists each), {} signals delivered behind them, {} waits passed for a write of a part not sent yet",
@@ -1218,6 +1242,10 @@ pub(crate) enum Written {
     GpuTimestamp,
     /// The CPU's performance counter.
     SystemTimestamp,
+    /// A query result the host GPU resolved into a read-back buffer
+    /// (`crate::query::resolve`, `VICTORY_OCCLUSION`): read when written,
+    /// which is once the list has run.
+    Query(u32),
 }
 
 impl Written {
@@ -1231,6 +1259,7 @@ impl Written {
                 (elapsed.as_nanos() / (1_000_000_000 / u128::from(TIMESTAMP_FREQUENCY))) as u64
             }
             Written::SystemTimestamp => system_timestamp(),
+            Written::Query(slot) => crate::query::result(slot),
         };
         // SAFETY: the title names writable GPU memory (unified with ours).
         unsafe {
@@ -1365,6 +1394,8 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
     #[cfg(all(windows, feature = "diagnostics"))]
     {
         crate::capture::frame_drew(frame, crate::draw::drawn());
+        crate::renderdoc::frame_drew(frame, crate::draw::drawn());
+        crate::shot::present(frame, crate::draw::drawn());
         if crate::capture::listed(frame) {
             crate::capture::dump_targets(frame);
         }
@@ -1475,6 +1506,8 @@ extern "system" fn copy_page_mappings(
         unsafe { std::slice::from_raw_parts(batches, count as usize) }
     });
     let mut ok = true;
+    // The remapping meter: what the title asks for, by kind of range.
+    crate::framelog::add(crate::framelog::T::PageMapCalls, 1);
     for b in batches.into_iter().flatten() {
         if b.ranges.is_null() {
             continue;
@@ -1486,6 +1519,19 @@ extern "system" fn copy_page_mappings(
             let len = u64::from(r.count) * PAGE;
             let inside = |pages: u32| r.start.checked_add(pages).is_some_and(|e| e <= pool_pages);
             let source = pool + u64::from(r.start) * PAGE;
+            {
+                use crate::framelog::{T, add};
+                let counted = match r.kind {
+                    0 => Some((T::PageMapRanges0, T::PageMapPages0)),
+                    1 => Some((T::PageMapRanges1, T::PageMapPages1)),
+                    2 => Some((T::PageMapRanges2, T::PageMapPages2)),
+                    _ => None,
+                };
+                if let Some((ranges, pages)) = counted {
+                    add(ranges, 1);
+                    add(pages, u64::from(r.count));
+                }
+            }
             ok &= match r.kind {
                 0 if inside(r.count) => map(at, source, len),
                 1 if inside(1) => (0..u64::from(r.count)).all(|k| map(at + k * PAGE, source, PAGE)),

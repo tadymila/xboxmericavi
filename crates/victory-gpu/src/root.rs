@@ -203,6 +203,25 @@ extern "system" fn release(this: This) -> u32 {
     object::release_boxed::<RootSignature>(this)
 }
 
+/// The serialized form of `this` if it is one of our root signatures (its
+/// function table is ours): the device methods 0x1c8 / 0x218 name one by
+/// pointer in a description of the title's. The table word is read through
+/// the kernel first, so a pointer that is not one of ours is never touched.
+#[cfg(windows)]
+pub(crate) fn blob(this: This) -> Option<Vec<u8>> {
+    let mut first = [0u8; 8];
+    if this.is_null() || !crate::host::read_into(this.cast(), &mut first) {
+        return None;
+    }
+    if usize::from_le_bytes(first) != FUNCTIONS.0.as_ptr() as usize {
+        return None;
+    }
+    // SAFETY: one of ours (its table): a live `RootSignature` while the
+    // title holds the description that names it.
+    let root = unsafe { &*this.cast::<RootSignature>() };
+    Some(root.blob.clone())
+}
+
 /// IUnknown 3, object 4, device child 1.
 static FUNCTIONS: Table<24> = {
     let mut f = object::d3d12_object(object::missing_table::<ROOT_SIGNATURE, 24>());

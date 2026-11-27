@@ -36,6 +36,8 @@ cargo build --release --locked -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 if not exist "%LOCALAPPDATA%\victory" mkdir "%LOCALAPPDATA%\victory"
 start "xboxmericavi stats" "%~dp0xboxmericavi-stats.cmd" xboxmericavi.log
+rem The console: what the game does right now (frame rate, shaders, pipelines, warnings).
+start "xboxmericavi console" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\console.ps1" -Log xboxmericavi.log
 echo Starting (%PRESET%)... log: %LOCALAPPDATA%\victory\xboxmericavi.log
 rem High CPU priority: the emulator is CPU-bound on 8-thread CPUs.
 start "xboxmericavi" /b /wait /high target\release\victory.exe run "%GAME_EXE%" --console series-s --execute > "%LOCALAPPDATA%\victory\xboxmericavi.log" 2>&1

@@ -42,11 +42,13 @@ The launcher remembers your path (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.
 
 ## One preset
 
-`xboxmericavi.cmd` (what the launcher's **PLAY** runs): the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), the game on the **Series S** profile (fewer pixels, the fastest), high CPU priority, a log for the stats window and the live stats window.
+`xboxmericavi.cmd` (what the launcher's **PLAY** runs): the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), the game on the **Series S** profile (fewer pixels, the fastest), high CPU priority, a log, the console and the live stats window.
 
 ## What this fork adds
 
 - **GUI launcher** (`tools/launcher.ps1`): game path check, one-click build and start, the last run's average fps, live stats.
+- **Console** (`tools/console.ps1`), opened with the game: one line a second (fps, where the frame's time goes, draws, pipelines still being made), shader progress, warnings in yellow, errors in red.
+- **Frame rate box in the corner** (`fpsbox.rs` and `stats.rs` from victory-fork): fps, CPU, GPU, VRAM, RAM; `VICTORY_FPS_COUNTER=0` hides it, `=fps` shows the rate alone.
 - **Live stats window** (`tools/stats.ps1`): fps, frame-time graph, per-frame breakdown, CSV export. Loading screens and menus (under 1,000 draws) are left out of the averages.
 - **Own icon in `victory.exe` and its window** (`branding/icon.ico`, put in by `apps/victory/build.rs` as a resource, no extra tool or crate).
 

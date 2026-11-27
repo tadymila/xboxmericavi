@@ -209,13 +209,16 @@ $btnStart.Add_Click({
 })
 $form.Controls.Add($btnStart)
 
-$btnStats = FlatButton "Live stats" 20 362 194 40 $card $field $fg $line
+$btnStats = FlatButton "Live stats" 20 362 142 40 $card $field $fg $line
 $btnStats.Add_Click({ Start-Process -FilePath (Join-Path $root "xboxmericavi-stats.cmd") -ArgumentList $logName -WorkingDirectory $root })
 $form.Controls.Add($btnStats)
-$btnLogs = FlatButton "Logs folder" 223 362 194 40 $card $field $fg $line
+$btnCon = FlatButton "Console" 172 362 142 40 $card $field $fg $line
+$btnCon.Add_Click({ Start-Process powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $root 'tools\console.ps1')`"", "-Log", $logName) })
+$form.Controls.Add($btnCon)
+$btnLogs = FlatButton "Logs folder" 324 362 142 40 $card $field $fg $line
 $btnLogs.Add_Click({ Start-Process explorer.exe $dataDir })
 $form.Controls.Add($btnLogs)
-$btnGit = FlatButton "GitHub" 426 362 194 40 $card $field $fg $line
+$btnGit = FlatButton "GitHub" 476 362 144 40 $card $field $fg $line
 $btnGit.Add_Click({ Start-Process "https://github.com/tadymila/xboxmericavi" })
 $form.Controls.Add($btnGit)
 

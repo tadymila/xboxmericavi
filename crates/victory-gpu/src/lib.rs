@@ -17,6 +17,12 @@
 
 #[cfg(windows)]
 mod ambient;
+#[cfg(windows)]
+mod lightprobe;
+#[cfg(windows)]
+mod texlate;
+#[cfg(windows)]
+mod texstore;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
 #[cfg(windows)]
@@ -33,6 +39,8 @@ pub mod device;
 #[cfg(windows)]
 mod draw;
 pub mod dxgi;
+#[cfg(windows)]
+pub mod external;
 pub mod fence;
 pub mod frame;
 // xboxmericavi: the frame rate box in the corner (from fxceless/victory-fork).
@@ -46,6 +54,16 @@ mod host;
 mod indirect;
 #[cfg(windows)]
 mod inplace;
+#[cfg(windows)]
+mod port;
+#[cfg(windows)]
+mod port_cbv;
+#[cfg(windows)]
+pub mod port_descriptors;
+#[cfg(windows)]
+mod port_journal;
+#[cfg(windows)]
+mod port_rt;
 #[cfg(windows)]
 mod land;
 pub mod list;
@@ -111,6 +129,11 @@ pub fn switched(switch: &str) -> Option<bool> {
 #[cfg(all(windows, feature = "diagnostics"))]
 pub fn frame_phase() -> u32 {
     copystat::phase()
+}
+
+/// Frames the title has begun (its frame waits that ended), for logs.
+pub fn frames_begun() -> u64 {
+    frame::current()
 }
 #[cfg(windows)]
 pub use inplace::{title_memory_freeing, title_memory_section, title_memory_section_gone, title_memory_view};

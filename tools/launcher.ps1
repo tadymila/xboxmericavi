@@ -50,7 +50,21 @@ $logo = $null
 if (Test-Path $iconPath) {
     try {
         $form.Icon = New-Object System.Drawing.Icon($iconPath)
-        $logo = (New-Object System.Drawing.Icon($iconPath, 256, 256)).ToBitmap()
+        # The largest picture in the icon file, read as it is stored (the
+        # 256-pixel one is a PNG, which Icon.ToBitmap cannot read).
+        $bytes = [System.IO.File]::ReadAllBytes($iconPath)
+        $count = [BitConverter]::ToUInt16($bytes, 4)
+        $best = -1; $bestSize = 0
+        for ($i = 0; $i -lt $count; $i++) {
+            $w = [int]$bytes[6 + 16 * $i]; if ($w -eq 0) { $w = 256 }
+            if ($w -gt $bestSize) { $bestSize = $w; $best = $i }
+        }
+        if ($best -ge 0) {
+            $len = [BitConverter]::ToInt32($bytes, 6 + 16 * $best + 8)
+            $at  = [BitConverter]::ToInt32($bytes, 6 + 16 * $best + 12)
+            $ms  = New-Object System.IO.MemoryStream($bytes, $at, $len)
+            $logo = New-Object System.Drawing.Bitmap($ms)
+        }
     } catch {}
 }
 

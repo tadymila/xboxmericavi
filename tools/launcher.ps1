@@ -38,7 +38,7 @@ function Font($size, $bold = $false) {
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "xboxmericavi"
-$form.ClientSize = New-Object System.Drawing.Size(640, 470)
+$form.ClientSize = New-Object System.Drawing.Size(640, 588)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
@@ -57,7 +57,7 @@ if (Test-Path $iconPath) {
 # Header: a pink-to-lavender band with the logo and the name.
 $header = New-Object System.Windows.Forms.Panel
 $header.Location = New-Object System.Drawing.Point(0, 0)
-$header.Size = New-Object System.Drawing.Size(640, 112)
+$header.Size = New-Object System.Drawing.Size(640, 230)
 $header.Add_Paint({
     param($s, $e)
     $g = $e.Graphics
@@ -68,10 +68,11 @@ $header.Add_Paint({
     $g.FillRectangle($brush, $rect)
     $shade = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, [System.Drawing.Color]::FromArgb(0, 0, 0, 0), [System.Drawing.Color]::FromArgb(90, 18, 12, 28), 90.0)
     $g.FillRectangle($shade, $rect)
-    $x = 24
-    if ($logo) { $g.DrawImage($logo, 22, 14, 84, 84); $x = 120 }
-    $g.DrawString("xboxmericavi", (Font 24 $true), [System.Drawing.Brushes]::White, $x, 18)
-    $g.DrawString("GTA VI (Xbox Series build) on your PC, from your own files", (Font 10), (New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))), ($x + 3), 64)
+    $g.InterpolationMode = "HighQualityBicubic"
+    $x = 28
+    if ($logo) { $g.DrawImage($logo, 14, 12, 206, 206); $x = 232 }
+    $g.DrawString("xboxmericavi", (Font 30 $true), [System.Drawing.Brushes]::White, $x, 62)
+    $g.DrawString("GTA VI (Xbox Series build) on your PC,`nfrom your own files", (Font 11), (New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))), ($x + 4), 120)
 })
 $form.Controls.Add($header)
 
@@ -87,7 +88,7 @@ function RoundedPath($r, $radius) {
     $p
 }
 $panel = New-Object System.Windows.Forms.Panel
-$panel.Location = New-Object System.Drawing.Point(20, 130)
+$panel.Location = New-Object System.Drawing.Point(20, 248)
 $panel.Size = New-Object System.Drawing.Size(600, 104)
 $panel.BackColor = $bg
 $panel.Add_Paint({
@@ -169,7 +170,7 @@ $panel.Controls.Add($btnBrowse)
 
 # The last run, from its log: average fps of frames in the world (1,000+ draws).
 $lblStatus = New-Object System.Windows.Forms.Label
-$lblStatus.Location = New-Object System.Drawing.Point(22, 326)
+$lblStatus.Location = New-Object System.Drawing.Point(22, 444)
 $lblStatus.Size = New-Object System.Drawing.Size(600, 22)
 $lblStatus.ForeColor = $muted
 $lblStatus.Font = Font 9.5
@@ -194,7 +195,7 @@ if (Test-Path $logPath) {
 }
 
 # The big button.
-$btnStart = FlatButton "PLAY" 20 252 600 64 $pink $pinkHi ([System.Drawing.Color]::White) $pink
+$btnStart = FlatButton "PLAY" 20 370 600 64 $pink $pinkHi ([System.Drawing.Color]::White) $pink
 $btnStart.Font = Font 18 $true
 $btnStart.Add_Click({
     $exe = $txtExe.Text.Trim('"', ' ')
@@ -209,22 +210,22 @@ $btnStart.Add_Click({
 })
 $form.Controls.Add($btnStart)
 
-$btnStats = FlatButton "Live stats" 20 362 142 40 $card $field $fg $line
+$btnStats = FlatButton "Live stats" 20 480 142 40 $card $field $fg $line
 $btnStats.Add_Click({ Start-Process -FilePath (Join-Path $root "xboxmericavi-stats.cmd") -ArgumentList $logName -WorkingDirectory $root })
 $form.Controls.Add($btnStats)
-$btnCon = FlatButton "Console" 172 362 142 40 $card $field $fg $line
+$btnCon = FlatButton "Console" 172 480 142 40 $card $field $fg $line
 $btnCon.Add_Click({ Start-Process powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $root 'tools\console.ps1')`"", "-Log", $logName) })
 $form.Controls.Add($btnCon)
-$btnLogs = FlatButton "Logs folder" 324 362 142 40 $card $field $fg $line
+$btnLogs = FlatButton "Logs folder" 324 480 142 40 $card $field $fg $line
 $btnLogs.Add_Click({ Start-Process explorer.exe $dataDir })
 $form.Controls.Add($btnLogs)
-$btnGit = FlatButton "GitHub" 476 362 144 40 $card $field $fg $line
+$btnGit = FlatButton "GitHub" 476 480 144 40 $card $field $fg $line
 $btnGit.Add_Click({ Start-Process "https://github.com/tadymila/xboxmericavi" })
 $form.Controls.Add($btnGit)
 
 $foot = New-Object System.Windows.Forms.Label
 $foot.Text = "Built on CGBJ (Codec) | VIctory-7900XTX (AvatarManz) | victory-fork | VIctory (Marvisak). GPL-3.0. No game files included."
-$foot.Location = New-Object System.Drawing.Point(22, 420)
+$foot.Location = New-Object System.Drawing.Point(22, 538)
 $foot.Size = New-Object System.Drawing.Size(600, 40)
 $foot.ForeColor = Rgb 110 98 134
 $foot.Font = Font 8.5

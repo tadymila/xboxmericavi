@@ -9800,12 +9800,17 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
     // SAFETY: registers our class once and creates a window of it.
     unsafe {
         let instance = GetModuleHandleW(None)?;
+        // xboxmericavi: the window and taskbar show the executable's own icon (group 1,
+        // put in by apps/victory/build.rs); none if it has none.
+        let icon = LoadIconW(Some(instance.into()), PCWSTR(1 as _)).unwrap_or_default();
         let class = WNDCLASSEXW {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_proc),
             hInstance: instance.into(),
             lpszClassName: CLASS,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
+            hIcon: icon,
+            hIconSm: icon,
             ..Default::default()
         };
         RegisterClassExW(&class);

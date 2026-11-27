@@ -1,144 +1,72 @@
-> ## This fork
->
-> A fork of **codec-d/cool_fox** at `f4b48ad` (26 November 2026), whose repository
-> was deleted from GitHub — this tree is the surviving copy of its source. It runs
-> an Xbox Series title natively on Windows from files the user supplies and
-> contains no game files, code or assets.
->
-> Work from **avatarmanz/VIctory-7900XTX** and from **Pavl3000/ztrx** is taken in
-> one commit at a time, each naming its source and author. `docs/integration.md`
-> says what has been taken, what was deliberately left out, and why. `main` is
-> codec-d's tree as it was published; the work is on the `wave*` branches.
->
-> Licence: GPL-3.0-or-later, as the trees it comes from. The credits below and in
-> `LICENSE` stand; `crates/victory-formats/src/bcpack-tables.bin` is the one file
-> the licence does not cover (`docs/asset-policy.md`).
+<p align="center"><img src="branding/logo-chill.svg" width="220" alt="xboxmericavi"></p>
 
-# VIctory on an RX 7900 XTX
+# xboxmericavi
 
-## Run the codec_d Windows build
+**A launcher-and-presets fork built on Codec's CGBJ code** ([Pavl3000/cgbj-fork](https://github.com/Pavl3000/cgbj-fork), the surviving copy of codec-d/cool_fox at `f4b48ad`), which is itself [avatarmanz/VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX) with NVIDIA work on top. All of it goes back to [VIctory](https://github.com/Marvisak/VIctory) by Marvisak.
+Runs the Xbox Series build of Grand Theft Auto VI natively on Windows from files you supply yourself.
 
-Download and extract the Windows x64 ZIP from the [private releases](https://github.com/codec-d/cool_fox/releases/latest). Open PowerShell in the extracted folder and point the launcher at your own complete Xbox dump.
+> **No game files, code or assets are in this repository.** You need your own copy of the game.
+> Not affiliated with or endorsed by Rockstar Games or Take-Two Interactive.
 
-```powershell
-$env:VICTORY_GAME_DIR = 'D:\Games\MyDump'
-.\Play-VIctory.cmd pareto-residency
-```
+## Status (2026-11-27)
 
-The launcher selects Series S and the RTX-tested residency settings. It builds its shader cache locally under `%LOCALAPPDATA%\VIctory\cache-pareto`. Set `VICTORY_CACHE_DIR` to reuse an existing cache outside the checkout. Windows x64, an AVX2 CPU, and a Direct3D 12 GPU with shader model 6.6 and mesh shader support are required.
+xboxmericavi now runs on the CGBJ code base instead of victory-fork. CGBJ's build is reported at about 25 fps on PortWatch (on a much faster PC than ours); this fork has yet to be measured on our test PC.
 
-To build from this checkout, install the pinned Rust toolchain and the MSVC C++ build tools with a Windows SDK, then run `cargo build --release --locked -p victory`. The same launcher finds `target\release\victory.exe`. The sections below describe the upstream AMD fork and its separate launcher.
+Tested on: **Intel i7-9700F** (8C/8T, no Zen 2 instructions, emulated), **RTX 5070 Ti 16 GB**, 64 GB RAM, Windows 11, game 1.0.2.1.
 
-A fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer
-that runs an Xbox Series title natively on Windows from files the user supplies.
-This one is about **speed on AMD RDNA 3**: the world at 30 frames a second on
-one PC, without giving up the picture. It is not there yet.
+The earlier, victory-fork-based xboxmericavi (4–6 fps on this PC) is in this repository's history up to commit `909bbb4`.
 
-**This repository contains no game files, code or assets.** You need your own
-copy of the game. It is not affiliated with or endorsed by the game's developer
-or publisher.
+<img width="2529" height="1414" alt="image" src="https://github.com/user-attachments/assets/99656005-9257-4621-8d1c-0b30ab36d7e9" />
 
-## Where it stands (2026-11-25)
+*Lucia's cell with the yard outside, earlier victory-fork-based TURBO: 252 ms/frame (4 fps), 4898 draws/frame, i7-9700F + RTX 5070 Ti.*
 
-Tested on one machine only: Windows 11, Intel i9-12900K, 64 GB RAM, Radeon
-RX 7900 XTX, 1440p, the Series X profile.
+<img width="2467" height="1390" alt="Screenshot_1" src="https://github.com/user-attachments/assets/85913f19-714a-45b1-bacf-2df74e6d6e7a" />
 
-| | |
-|---|---|
-| Menus, videos, loading screens | 30 fps |
-| Prologue, indoors | 50-75 ms a frame (13-20 fps) |
-| First mission with the boat | 46-53 ms (19-22 fps) |
-| Street chase with many cars and people | 100-165 ms (6-10 fps), single frames far longer |
-| Outdoors on foot, the camp | 60-90 ms |
-| Flying | 42-57 ms |
-| Longest session so far | 41 minutes, no crash |
-| Memory | 40-46 GB of private memory: **64 GB of RAM recommended** |
+*Prologue, earlier victory-fork-based TURBO: 212.9 ms/frame (~5 fps), 4378 draws/frame.*
 
-It started at 280 ms a frame in the same scenes two days earlier.
+<img width="1143" height="662" alt="Live stats window" src="https://github.com/user-attachments/assets/a7a8be17-a72e-4a06-89f0-7160e6a1f43e" />
 
-What is known to be wrong:
+*The live stats window: where each frame's time goes.*
 
-- Trees, plants and far buildings flicker outdoors in some places.
-- Rooms with little direct light are too dark without `-RayTracing`.
-- Textures of what just came into view appear late while the title streams.
-- The first run with a new driver or a new build stutters while the driver makes
-  pipelines (`victory warm` makes them ahead).
-- Recording a frame in the world makes the title's own watchdog end it.
+## Quick start
 
-## How to run it
+1. Install Rust and the C++ build tools (PowerShell, one at a time):
+   `winget install Rustlang.Rustup` and `winget install Microsoft.VisualStudio.2022.BuildTools` (pick the **Desktop development with C++** workload).
+2. Download or clone this repository (no game files in it).
+3. Double-click **`xboxmericavi-launcher.cmd`**:
+   - **Browse...** to your own `game_scarlett_master.exe`
+   - pick a preset (**TURBO** recommended)
+   - **BUILD & START**. The first build takes a few minutes; the first launch translates the shaders and lets the driver make its pipelines (slow and blurry for a few minutes).
+4. Keyboard works as a pad: WASD move, IJKL camera, Enter = A.
 
-You need Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with shader
-model 6.6 and mesh shaders, Rust (the toolchain is pinned), the MSVC build
-tools, and your own dump of the title.
+The launcher remembers your path and preset (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.json`). The `.cmd` presets still work on their own (set `GAME_EXE` or edit the line at their top).
 
-```powershell
-git clone https://github.com/avatarmanz/VIctory-7900XTX
-cd VIctory-7900XTX
-copy victory.example.toml victory.toml      # then set your paths, outside this folder
-cargo build --locked --profile diag -p victory --features diagnostics
-scripts\play.ps1 -Exe <path of your copy's executable>
-```
+## Presets
 
-`scripts\play.ps1 -Safe` leaves out the newest, faster ways; try it first when
-something is wrong. `-RayTracing` turns the title's ray-traced indirect light on.
+Both use the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), plus high CPU priority, a log for the stats window and the live stats window.
 
-Before the first run, ahead of time (both can be stopped and go on later):
+| Preset | File | Console profile | When |
+|---|---|---|---|
+| **TURBO** | `xboxmericavi-turbo.cmd` | Series S: the title renders fewer pixels | fastest, recommended |
+| QUALITY | `xboxmericavi.cmd` | Series X: full resolution | sharper picture, slower |
 
-```powershell
-target\diag\victory.exe shaders <the shader archives>   # every shader translated, minutes
-target\diag\victory.exe warm --used                     # pipelines earlier runs drew with, for a new driver or build
-```
+## What this fork adds
 
-Commands, debugging switches and upstream's own description:
-[docs/README-fxceless.md](docs/README-fxceless.md). Every `VICTORY_...` switch is
-described in a comment where it is read.
+- **GUI launcher** (`tools/launcher.ps1`) and the two presets above.
+- **Live stats window** (`tools/stats.ps1`): fps, frame-time graph, per-frame breakdown, CSV export. Loading screens and menus (under 1,000 draws) are left out of the averages.
+- **Own icon in `victory.exe` and its window** (`branding/icon.ico`, put in by `apps/victory/build.rs` as a resource, no extra tool or crate).
 
-## What is different here
+Everything else is CGBJ's, AvatarManz's and upstream's work; see `docs/cgbj-fork-README.md` and the rest of `docs/`.
 
-In short; the reasons and the measurements are in [docs/findings.md](docs/findings.md).
+## Known issues
 
-- **List calls are written down, not carried out, on the title's threads**
-  (`VICTORY_THIN`): eight threads of ours translate them.
-- **Submissions are prepared by a thread of ours and joined**
-  (`VICTORY_ASYNC_SUBMIT`, `VICTORY_JOIN_PARTS`), with what can be spread over
-  threads spread: refreshes, compares (AVX2), descriptor records, landings.
-- **What shaders wrote comes back beside the write guards**, by the dwords that
-  changed, on a thread of its own (`VICTORY_RELAY`, `VICTORY_LAND`).
-- **Buffer fills that need bytes still on the card are done on the card**
-  (`VICTORY_CARD_STEPS`) instead of waiting for it.
-- **The title's writes are caught more cheaply**: one view opened at a fault,
-  blocks that rest, places in the title's code that look before they write.
-- **Textures go up on a copy queue of their own** and a slot shows one only after
-  its upload ran, which also ended a device loss that came every 15 minutes or so.
-- **Boats float**: textures that shaders write and the title's CPU reads go back
-  to title memory (from fxceless and Geckomacabre, on by default here).
-- **Frame record and replay** with per-pass times and shader variants compared
-  turn by turn ([docs/replay.md](docs/replay.md)).
+- The first launch after a build is slow and blurry until the driver has made its pipelines (a few minutes); measure on the second launch.
+- Tested upstream on an RX 7900 XTX and an RTX 5090; the 8-thread i7-9700F is the limit on our PC.
 
 ## Credits
 
-This is a tree of other people's work with more on top. The history is kept, and
-commits taken from elsewhere name the commit and its author.
-
-- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its
-  contributors: the loader, the runtime services, the Direct3D 12 back end and
-  the shader recompiler.
-- **[fxceless/victory-fork](https://github.com/fxceless/victory-fork)**: the fork
-  this one started from, and the people whose pull requests it carries.
-- **[DexNom/VIctory](https://github.com/DexNom/VIctory)**: ray tracing fixes,
-  cube gradients, sparse textures.
-- **[Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD)**:
-  the ambient light idea, pipeline workers, and work by romainhedouin.
-- **[FQY55kai/ZJOU-VICTORY](https://github.com/FQY55kai/ZJOU-VICTORY)**.
-- **[myokex/victory-amd](https://github.com/myokex/victory-amd)**: the guard over
-  every view of a page (with Spexivus, joroyt and tightfall), and Joshua Odom's
-  reads into title memory.
-- **Geckomacabre** and **cxy0072019-sketch**: the texture read-back.
-- **[XCL](https://github.com/ivall/xcl)** (GPL-2.0-only) was read for how the same
-  title behaves under another layer; no code of it is here.
-- This fork's changes were made with [Claude Code](https://claude.com/claude-code).
-
-## License
-
-GPL-3.0-or-later, as VIctory. See [LICENSE](LICENSE); the one file that is not
-covered is named in [docs/asset-policy.md](docs/asset-policy.md).
+- **Codec (codec-d, CGBJ)**: the code base of this fork, NVIDIA Wave32 lowering, Series S two-plane fix, residency budgets. Surviving copy: [Pavl3000/cgbj-fork](https://github.com/Pavl3000/cgbj-fork) by Pavel.
+- [AvatarManz / VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX): the AMD speed work CGBJ builds on, bringing together [DexNom](https://github.com/DexNom/VIctory) and [Belobug](https://github.com/Belobug/VIctory-Belobug-AMD).
+- [victory-fork](https://github.com/fxceless/victory-fork) by hyphennn and contributors.
+- [VIctory](https://github.com/Marvisak/VIctory) by Marvisak and contributors: the base of everything (GPL-3.0-or-later).
+- This fork's changes were made with [Claude](https://claude.ai). License: GPL-3.0-or-later, see `LICENSE`.

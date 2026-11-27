@@ -1,14 +1,14 @@
 @echo off
 setlocal
-rem ==== xboxmericavi: QUALITY (Series X, sharper) ====
+rem ==== xboxmericavi ====
 rem The settings of Codec's (CGBJ) Play-VIctory.cmd pareto-residency, from Pavl3000/cgbj-fork.
-rem Series X: the console's full resolution; sharper, slower.
+rem Series S: the title renders fewer pixels; the fastest.
 rem Set the path to YOUR OWN game executable here (not included in this repo):
 if "%GAME_EXE%"=="" set "GAME_EXE=E:\GTA6.Xbox.v1.0.2.1\game_scarlett_master.exe"
 for %%I in ("%GAME_EXE%") do set "VICTORY_GAME_DIR=%%~dpI"
 cd /d "%~dp0"
 set "PATH=%PATH%;%USERPROFILE%\.cargo\bin"
-set "PRESET=QUALITY (Series X, sharper)"
+set "PRESET=xboxmericavi (Series S profile)"
 set VICTORY_TEXTURE_NO_WAIT=1
 set VICTORY_RELAY=2
 set VICTORY_WIDE_BACK=1
@@ -38,7 +38,7 @@ if not exist "%LOCALAPPDATA%\victory" mkdir "%LOCALAPPDATA%\victory"
 start "xboxmericavi stats" "%~dp0xboxmericavi-stats.cmd" xboxmericavi.log
 echo Starting (%PRESET%)... log: %LOCALAPPDATA%\victory\xboxmericavi.log
 rem High CPU priority: the emulator is CPU-bound on 8-thread CPUs.
-start "xboxmericavi" /b /wait /high target\release\victory.exe run "%GAME_EXE%" --console series-x --execute > "%LOCALAPPDATA%\victory\xboxmericavi.log" 2>&1
+start "xboxmericavi" /b /wait /high target\release\victory.exe run "%GAME_EXE%" --console series-s --execute > "%LOCALAPPDATA%\victory\xboxmericavi.log" 2>&1
 echo.
 echo Game exited. Log: %LOCALAPPDATA%\victory\xboxmericavi.log
 pause

@@ -1,7 +1,7 @@
 # xboxmericavi live stats: reads the VIctory log while the game runs and
 # draws frame time, fps and where each frame's time goes. Read-only.
 param(
-    [string]$Log = "xboxmericavi-turbo.log",
+    [string]$Log = "xboxmericavi.log",
     [int]$History = 60
 )
 $ErrorActionPreference = "SilentlyContinue"

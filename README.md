@@ -2,7 +2,7 @@
 
 # xboxmericavi
 
-**A launcher-and-presets fork built on Codec's CGBJ code** ([Pavl3000/cgbj-fork](https://github.com/Pavl3000/cgbj-fork), the surviving copy of codec-d/cool_fox at `f4b48ad`), which is itself [avatarmanz/VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX) with NVIDIA work on top. All of it goes back to [VIctory](https://github.com/Marvisak/VIctory) by Marvisak.
+**A launcher fork built on Codec's CGBJ code** ([Pavl3000/cgbj-fork](https://github.com/Pavl3000/cgbj-fork), the surviving copy of codec-d/cool_fox at `f4b48ad`), which is itself [avatarmanz/VIctory-7900XTX](https://github.com/avatarmanz/VIctory-7900XTX) with NVIDIA work on top. All of it goes back to [VIctory](https://github.com/Marvisak/VIctory) by Marvisak.
 Runs the Xbox Series build of Grand Theft Auto VI natively on Windows from files you supply yourself.
 
 > **No game files, code or assets are in this repository.** You need your own copy of the game.
@@ -35,24 +35,18 @@ The earlier, victory-fork-based xboxmericavi (4–6 fps on this PC) is in this r
 2. Download or clone this repository (no game files in it).
 3. Double-click **`xboxmericavi-launcher.cmd`**:
    - **Browse...** to your own `game_scarlett_master.exe`
-   - pick a preset (**TURBO** recommended)
-   - **BUILD & START**. The first build takes a few minutes; the first launch translates the shaders and lets the driver make its pipelines (slow and blurry for a few minutes).
+   - **PLAY**. The first build takes a few minutes; the first launch translates the shaders and lets the driver make its pipelines (slow and blurry for a few minutes).
 4. Keyboard works as a pad: WASD move, IJKL camera, Enter = A.
 
-The launcher remembers your path and preset (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.json`). The `.cmd` presets still work on their own (set `GAME_EXE` or edit the line at their top).
+The launcher remembers your path (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.json`). `xboxmericavi.cmd` still works on its own (set `GAME_EXE` or edit the line at their top).
 
-## Presets
+## One preset
 
-Both use the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), plus high CPU priority, a log for the stats window and the live stats window.
-
-| Preset | File | Console profile | When |
-|---|---|---|---|
-| **TURBO** | `xboxmericavi-turbo.cmd` | Series S: the title renders fewer pixels | fastest, recommended |
-| QUALITY | `xboxmericavi.cmd` | Series X: full resolution | sharper picture, slower |
+`xboxmericavi.cmd` (what the launcher's **PLAY** runs): the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), the game on the **Series S** profile (fewer pixels, the fastest), high CPU priority, a log for the stats window and the live stats window.
 
 ## What this fork adds
 
-- **GUI launcher** (`tools/launcher.ps1`) and the two presets above.
+- **GUI launcher** (`tools/launcher.ps1`): game path check, one-click build and start, the last run's average fps, live stats.
 - **Live stats window** (`tools/stats.ps1`): fps, frame-time graph, per-frame breakdown, CSV export. Loading screens and menus (under 1,000 draws) are left out of the averages.
 - **Own icon in `victory.exe` and its window** (`branding/icon.ico`, put in by `apps/victory/build.rs` as a resource, no extra tool or crate).
 

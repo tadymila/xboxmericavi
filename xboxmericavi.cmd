@@ -31,9 +31,12 @@ set VICTORY_CARD_BUFFERS_MIN_KB=64
 set VICTORY_CACHE_DIR=%LOCALAPPDATA%\VIctory\cache-pareto
 rem The frame lines (info) feed the stats window.
 set VICTORY_LOG=info
+rem PlayNOW.cmd sets XM_NOBUILD=1: start right away with the exe already built.
+if defined XM_NOBUILD if exist "target\release\victory.exe" goto start
 echo Building xboxmericavi (first build takes a few minutes)...
 cargo build --release --locked -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
+:start
 if not exist "%LOCALAPPDATA%\victory" mkdir "%LOCALAPPDATA%\victory"
 start "xboxmericavi stats" "%~dp0xboxmericavi-stats.cmd" xboxmericavi.log
 rem The console: what the game does right now (frame rate, shaders, pipelines, warnings).

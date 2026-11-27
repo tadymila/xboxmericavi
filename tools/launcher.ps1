@@ -14,9 +14,8 @@ if (Test-Path $cfgPath) {
 }
 
 $presets = [ordered]@{
-    "TURBO"  = @{ cmd = "xboxmericavi-turbo.cmd";  log = "xboxmericavi-turbo.log";  info = "Fastest (recommended). ~200-230 ms/frame on i7-9700F + RTX 5070 Ti." }
-    "MAX"    = @{ cmd = "xboxmericavi.cmd";        log = "xboxmericavi.log";        info = "Relay + late wait, without the TURBO extras." }
-    "STABLE" = @{ cmd = "xboxmericavi-stable.cmd"; log = "xboxmericavi.log";        info = "No relay / late wait. Use if MAX or TURBO flicker or crash." }
+    "TURBO"   = @{ cmd = "xboxmericavi-turbo.cmd"; log = "xboxmericavi-turbo.log"; info = "Fastest (recommended): the game runs as a Series S, fewer pixels." }
+    "QUALITY" = @{ cmd = "xboxmericavi.cmd";       log = "xboxmericavi.log";       info = "Sharper: the game runs as a Series X, full resolution, slower." }
 }
 
 $pink = [System.Drawing.Color]::FromArgb(255, 79, 163)

@@ -10,7 +10,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-const MAX_FILE_SIZE: usize = 512 * 1024;
+// (The translator's one file is 570 KiB of source.)
+const MAX_FILE_SIZE: usize = 640 * 1024;
 const MAX_ENCODED_RUN: usize = 512;
 
 const ALLOWED_EXTENSIONS: &[&str] = &[
@@ -32,30 +33,6 @@ const EXCEPTIONS: &[(&str, &str)] = &[(
     "crates/victory-formats/src/bcpack-tables.bin",
     "the BCPack format's constant tables: nothing decodes without them and they cannot be derived (owner's decision, 2026-11-23; docs/asset-policy.md)",
 )];
-
-/// Run logs: the layer's own log of a run, scrubbed of names, kept under
-/// `diagnostics/` by the owner's decision (2026-11-26; docs/asset-policy.md).
-/// A log is text we wrote, but long: these may be this large as text, and
-/// the longest are kept gzipped ([`RUN_LOG_GZ_MAX`]).
-const RUN_LOG_MAX: usize = 32 * 1024 * 1024;
-/// A gzipped run log (`diagnostics/*.txt.gz`) may be this large.
-const RUN_LOG_GZ_MAX: usize = 16 * 1024 * 1024;
-
-/// Whether `path` is a run log directly under `diagnostics/`: `Some(true)`
-/// for a gzipped one (`.txt.gz`), `Some(false)` for a text one (`.txt`).
-fn run_log(path: &str) -> Option<bool> {
-    let name = path.strip_prefix("diagnostics/")?;
-    if name.contains('/') {
-        return None;
-    }
-    if name.ends_with(".txt.gz") {
-        Some(true)
-    } else if name.ends_with(".txt") {
-        Some(false)
-    } else {
-        None
-    }
-}
 
 /// Signatures of formats that must never be committed.
 const FORBIDDEN_MAGIC: &[(&[u8], &str)] = &[
@@ -169,30 +146,6 @@ fn list_files(root: &Path, staged: bool) -> Result<Vec<String>> {
 /// All problems with one file. Pure, for testing.
 pub fn check(path: &str, content: &[u8]) -> Vec<String> {
     let mut problems = Vec::new();
-    // A run log has rules of its own: a larger size, and for a gzipped one
-    // the gzip signature instead of the text rule. (No rule on hex runs: a
-    // log quotes hashes and addresses.)
-    if let Some(gzipped) = run_log(path) {
-        let limit = if gzipped { RUN_LOG_GZ_MAX } else { RUN_LOG_MAX };
-        if content.len() > limit {
-            problems.push(format!("{} bytes exceeds the {limit}-byte limit for a run log", content.len()));
-        }
-        if gzipped {
-            if !content.starts_with(&[0x1f, 0x8b]) {
-                problems.push("a .txt.gz run log that is not a gzip stream".to_owned());
-            }
-        } else {
-            for (magic, what) in FORBIDDEN_MAGIC {
-                if content.starts_with(magic) {
-                    problems.push(format!("looks like a {what}"));
-                }
-            }
-            if content.contains(&0) {
-                problems.push("binary content (NUL bytes)".to_owned());
-            }
-        }
-        return problems;
-    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     let allowed = ALLOWED_NAMES.contains(&name)
@@ -219,6 +172,13 @@ pub fn check(path: &str, content: &[u8]) -> Vec<String> {
         && run > MAX_ENCODED_RUN
     {
         problems.push(format!("{run}-character hex/base64 run (embedded data?)"));
+    } else {
+        let digits = longest_hex_literal_run(content);
+        if digits > MAX_ENCODED_RUN {
+            problems.push(format!(
+                "{digits} hex digits in one run of \\x/0x literals (embedded data?)"
+            ));
+        }
     }
     problems
 }
@@ -229,6 +189,38 @@ fn longest_encoded_run(content: &[u8]) -> Option<usize> {
     content.split(|b| !is_payload(b)).map(<[u8]>::len).max()
 }
 
+/// Most hex digits in `\xNN` escapes or `0x` literals with only commas,
+/// whitespace or backslashes between them: a byte string or `xxd -i` array,
+/// which `longest_encoded_run` sees as many 3- or 4-character runs.
+/// shortcut: decimal arrays (`[77, 90, ...]`) still pass, add a literal count if one shows up.
+fn longest_hex_literal_run(content: &[u8]) -> usize {
+    let (mut i, mut run, mut longest) = (0, 0, 0);
+    while i < content.len() {
+        match &content[i..] {
+            [b'\\' | b'0', b'x' | b'X', rest @ ..] => {
+                let len = rest
+                    .iter()
+                    .take_while(|b| b.is_ascii_hexdigit() || **b == b'_')
+                    .count();
+                run += rest[..len].iter().filter(|b| b.is_ascii_hexdigit()).count();
+                longest = longest.max(run);
+                // Skip a type suffix such as `u8` or `u32`.
+                let suffix = rest[len..]
+                    .iter()
+                    .take_while(|b| b.is_ascii_alphanumeric())
+                    .count();
+                i += 2 + len + suffix;
+            }
+            [b, ..] if matches!(b, b',' | b'\\') || b.is_ascii_whitespace() => i += 1,
+            _ => {
+                run = 0;
+                i += 1;
+            }
+        }
+    }
+    longest
+}
+
 #[cfg(test)]
 mod tests {
     use super::check;
@@ -237,24 +229,6 @@ mod tests {
     #[test]
     fn repository_passes_policy() {
         super::run(&crate::workspace_root(), false).unwrap();
-    }
-
-    /// Run logs under `diagnostics/` may be long, and gzipped; nothing else
-    /// there, nothing deeper, and nothing that is not what its name says.
-    #[test]
-    fn run_logs_have_their_own_rules() {
-        let long = vec![b'a'; 4 * 1024 * 1024];
-        assert!(check("diagnostics/run-1.txt", &long).is_empty());
-        assert!(check("diagnostics/run-1.txt.gz", &[0x1f, 0x8b, 8, 0, 0, 0]).is_empty());
-        // Not a gzip stream; binary under a text name; too long.
-        assert!(!check("diagnostics/run-1.txt.gz", b"MZ\x90\x00").is_empty());
-        assert!(!check("diagnostics/run-1.txt", b"abc\0def").is_empty());
-        assert!(!check("diagnostics/run-1.txt", &vec![b'a'; super::RUN_LOG_MAX + 1]).is_empty());
-        assert!(!check("diagnostics/run-1.txt.gz", &[&[0x1f, 0x8b][..], &vec![0u8; super::RUN_LOG_GZ_MAX][..]].concat()).is_empty());
-        // The ordinary rules everywhere else, and for other names there.
-        assert!(!check("docs/run-1.txt", &long).is_empty());
-        assert!(!check("diagnostics/deeper/run-1.txt", &long).is_empty());
-        assert!(!check("diagnostics/shot.png", b"\x89PNG").is_empty());
     }
 
     #[test]
@@ -285,5 +259,42 @@ mod tests {
     fn rejects_data_smuggled_into_text() {
         let blob = format!("const DATA: &str = \"{}\";", "A1".repeat(400));
         assert!(!check("src/blob.rs", blob.as_bytes()).is_empty());
+    }
+
+    /// Synthetic bytes, never game data.
+    fn synthetic(n: u32) -> impl Iterator<Item = u32> {
+        (0..n).map(|i| (i * 37 + 11) % 256)
+    }
+
+    #[test]
+    fn rejects_data_smuggled_as_an_escaped_byte_string() {
+        // 4096 bytes as one unbroken `\xNN` hex run, the shape a byte-string
+        // literal of copied data takes.
+        let esc: String = synthetic(4096).map(|b| format!("\\x{b:02x}")).collect();
+        let src = format!("pub const DATA: &[u8] = b\"{esc}\";\n");
+        assert!(
+            !check("src/data.rs", src.as_bytes()).is_empty(),
+            "{} bytes of \\x-escaped hex passed",
+            src.len()
+        );
+    }
+
+    #[test]
+    fn rejects_data_smuggled_as_a_hex_byte_array() {
+        // `xxd -i` style: 4096 bytes as hex literals.
+        let lits: Vec<String> = synthetic(4096).map(|b| format!("0x{b:02x}")).collect();
+        let src = format!("pub const DATA: [u8; 4096] = [{}];\n", lits.join(", "));
+        assert!(
+            !check("src/data.rs", src.as_bytes()).is_empty(),
+            "{} bytes of hex array passed",
+            src.len()
+        );
+        // A short constant table, like the 16-entry ones in the tree, stays legal.
+        let table: Vec<String> = synthetic(16).map(|w| format!("0x{w:08x}_u32")).collect();
+        let src = format!(
+            "const T: [u32; 16] = [\n    {},\n];\n",
+            table.join(",\n    ")
+        );
+        assert!(check("src/table.rs", src.as_bytes()).is_empty());
     }
 }

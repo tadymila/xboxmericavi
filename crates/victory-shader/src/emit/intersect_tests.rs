@@ -162,13 +162,19 @@ fn build(
     wide: bool,
     descriptor: Descriptor,
 ) -> Result<(HostShader, resource::Resources), ShaderError> {
-    let native = native(&program(wide, descriptor));
+    build_compute_shader(&native(&program(wide, descriptor)))
+}
+
+/// `native`, a compute program, translated (the tests' own way: no container).
+pub(super) fn build_compute_shader(
+    native: &NativeProgram,
+) -> Result<(HostShader, resource::Resources), ShaderError> {
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
     let st = structure::structure(&p).expect("structure");
     let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
-    let io = io::raise(&p, &native).expect("io::raise");
+    let io = io::raise(&p, native).expect("io::raise");
     let lowered = lower::lower(&lower::Parts {
-        native: &native,
+        native,
         p: &p,
         st: &st,
         io: &io,
@@ -188,7 +194,6 @@ fn build(
         root_srvs: lowered.root_srvs,
         root_uavs: lowered.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
-        half_views: lowered.half_views,
     };
     if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
         let mut copy = shader.dxil.clone();
@@ -296,6 +301,12 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
     let ids2 = [8, bvh::NONE, 24, 0x1fff_fffc];
     box_nodes.push((s.add(nodes::box32(ids2, around), 32), 5));
     box_nodes.push((s.add(nodes::box16(ids2, around), 16), 4));
+    // A child that is not there with inverted infinite bounds (the title's
+    // builder leaves such slots): every ray "enters" it at minus infinity.
+    let mut empty = lined;
+    empty[1] = [f32::INFINITY, f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    let ids3 = [0x105, bvh::NONE, 0x304, 0x400];
+    box_nodes.push((s.add(nodes::box32(ids3, empty), 32), 5));
     // Random boxes.
     for n in 0..6 {
         let boxes: [[f32; 6]; 4] = std::array::from_fn(|_| {
@@ -656,25 +667,6 @@ fn a_descriptor_of_numbers_is_title_memory_read_through_the_directory() {
         let (shader, _) = build(wide, WHOLE).expect("lowers through the directory");
         assert!(shader.root_srvs.contains(&super::SLOT_MEMORY));
         assert!(shader.root_uavs.contains(&super::SLOT_FAULTS));
-    }
-}
-
-/// With `VICTORY_BVH_NO_HIT=1` a node test over title memory lowers and
-/// validates, and reads nothing: the program asks the host neither for the
-/// directory of title memory nor for the list of pages it found no copy
-/// of, which it does without the switch (the test above).
-#[test]
-fn a_node_test_that_answers_no_hit_reads_nothing() {
-    for wide in [true, false] {
-        super::lower::intersect::TEST_NO_HIT.set(true);
-        let built = build(wide, WHOLE);
-        super::lower::intersect::TEST_NO_HIT.set(false);
-        let (shader, _) = built.expect("lowers with no hit");
-        assert!(!shader.root_srvs.contains(&super::SLOT_MEMORY));
-        assert!(!shader.root_uavs.contains(&super::SLOT_FAULTS));
-        // And with it off again, as before.
-        let (shader, _) = build(wide, WHOLE).expect("lowers through the directory");
-        assert!(shader.root_srvs.contains(&super::SLOT_MEMORY));
     }
 }
 

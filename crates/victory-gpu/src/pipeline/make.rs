@@ -13,66 +13,91 @@
 //! whose pipeline is not ready is dropped, as an untranslated one is.
 //!
 //! The default budget is half a second per title frame. A pass the title
-//! runs only once and whose pipeline takes longer is lost.
+//! runs only once and whose pipeline takes longer is lost. Passes over the
+//! screen (no vertex input, no depth) have workers and a longer budget of
+//! their own ([`screen_budget`]): the title fills its lighting tables with
+//! such draws once, at the world's first frame, and behind a world's worth of
+//! pipelines they were dropped; that run had no lamps and no diffuse light to
+//! its end (run textures-d2, the first after a new translation; Belobug
+//! 18e57db8 found the same).
 
 use std::collections::VecDeque;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::Shader;
-use super::host::{GraphicsState, HostPipeline, TargetFormats};
-
-/// `VICTORY_DENY_PIPELINES=<16-hex shader hash>,...` (off unless set): the
-/// hash of a shader of `shaders` that is listed there. Such a pipeline is
-/// never built (no driver compile) and counts as refused, so its draws and
-/// dispatches are dropped: a test of whether building a pipeline, rather
-/// than running it, is what loses the card (runs 281 and 318: the removal
-/// 32 and 81 ms after the 3-second build of `CS_RaytracingResolve` of the
-/// two-layer vehicle wheel material, 57a3fad03cac36af and d5b9c94a30d7cf28;
-/// gfx41). Unlike `VICTORY_SKIP_PIPELINES`, in release builds too.
-fn denied(shaders: &[Arc<Shader>]) -> Option<&str> {
-    static LIST: OnceLock<Vec<String>> = OnceLock::new();
-    let list = LIST.get_or_init(|| {
-        std::env::var("VICTORY_DENY_PIPELINES")
-            .unwrap_or_default()
-            .split(',')
-            .map(|h| h.trim().to_ascii_lowercase())
-            .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-            .collect()
-    });
-    if list.is_empty() {
-        return None;
-    }
-    shaders.iter().find(|s| list.contains(&s.hash)).map(|s| s.hash.as_str())
-}
-
-/// The shaders of `p` (for logs).
-pub(crate) fn shaders(p: &Pending) -> &[Arc<Shader>] {
-    &p.shaders
-}
+use super::host::{GraphicsState, HostPipeline};
 
 /// What a host pipeline is made from, and the host pipeline once made.
 pub(crate) struct Pending {
     shaders: Vec<Arc<Shader>>,
     pub(crate) graphics: Option<Box<GraphicsState>>,
     queue_state: AtomicU8,
+    /// Taken by a worker from [`Queue::slow`].
+    was_slow: AtomicBool,
     made: OnceLock<Option<HostPipeline>>,
     /// What identifies it across runs (shader containers and state), and
     /// whether a draw or dispatch has requested it yet.
     key: String,
     used: AtomicBool,
-    /// Whether the made pipeline has gone to a draw or dispatch yet
-    /// (`crate::host::first_use`: for a device removal's report).
-    handed: AtomicBool,
-    /// The formats its state declares for what a draw draws into (zeros
-    /// without a graphics state).
-    pub(crate) formats: TargetFormats,
-    /// The same shaders and state for other formats, bound at a draw
-    /// ([`for_formats`]): a chain from the title's pipeline, one link per
-    /// set of formats met, never shortened.
-    variant: OnceLock<Arc<Pending>>,
+    /// A pass over the screen ([`GraphicsState::screen_pass`]) or a confirmed
+    /// opening-scene / bake producer that must never sit behind cold RT shaders.
+    screen: bool,
+    /// Confirmed first-scene / bake producer prepared early even on a cold cache.
+    scene_input: bool,
+    /// Why this pipeline is intentionally skipped (e.g. RT resolve without BVH).
+    left_out: Option<&'static str>,
+}
+
+fn named(shaders: &[Arc<Shader>], name: &[u8]) -> bool {
+    shaders
+        .iter()
+        .any(|s| s.stage == "compute" && s.container.windows(name.len()).any(|w| w == name))
+}
+
+fn left_out(shaders: &[Arc<Shader>]) -> Option<&'static str> {
+    static SKIP_RT_RESOLVE: OnceLock<bool> = OnceLock::new();
+    let skip_rt = *SKIP_RT_RESOLVE.get_or_init(|| {
+        let builder = std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1");
+        if builder {
+            return false;
+        }
+        // Without BVH, ~1,000 CS_RaytracingResolve shaders shade no hits while
+        // clogging the cold compiler queue; skip unless VICTORY_RT_RESOLVE=1.
+        std::env::var_os("VICTORY_RT_RESOLVE").is_none_or(|v| v == "0")
+    });
+    if skip_rt && named(shaders, b"CS_RaytracingResolve") {
+        return Some("shades ray-tracing hits without BVH, left out");
+    }
+    static SKIP_ACTIVATE_RAYS: OnceLock<bool> = OnceLock::new();
+    let skip_activate = *SKIP_ACTIVATE_RAYS.get_or_init(|| {
+        let builder = std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1");
+        if builder {
+            return std::env::var_os("VICTORY_ACTIVATE_RAYS").is_some_and(|v| v == "0");
+        }
+        std::env::var_os("VICTORY_ACTIVATE_RAYS").is_none_or(|v| v == "0")
+    });
+    if skip_activate && named(shaders, b"CS_ScreenProbes_ActivateRays") {
+        return Some("ray activation shader without BVH, left out");
+    }
+    None
+}
+
+/// Confirmed first-scene producers. Prepare these at creation even on a cold
+/// launch so cutscene lighting, tiling, and bakes never miss their first frame.
+fn scene_input(shaders: &[Arc<Shader>]) -> bool {
+    shaders.iter().any(|s| {
+        matches!(
+            s.hash.as_str(),
+            "970c4fbb3b017c0e"
+                | "068c90badc86f1fd"
+                | "e4a7e088c7780ce8"
+                | "ebe4e53f031f5249"
+                | "2cc4c197ee29e291"
+                | "369cbe906ea72764"
+        ) || crate::draw::BAKE_PIXEL_SHADERS.contains(&s.hash.as_str())
+    })
 }
 
 // SAFETY: D3D12 objects are free-threaded; the graphics state (whose input
@@ -89,39 +114,35 @@ impl Pending {
             key.update(s.hash.as_bytes());
         }
         key.update(graphics.as_ref().map(|g| g.describe()).unwrap_or_default().as_bytes());
+        let scene_input = scene_input(&shaders);
+        let screen = (graphics.as_ref().is_some_and(|g| g.screen_pass())
+            && shaders.iter().all(|s| s.stage != "mesh"))
+            || scene_input;
+        let left_out = left_out(&shaders);
         Pending {
-            formats: graphics.as_ref().map_or([0; 9], |g| g.formats()),
-            variant: OnceLock::new(),
+            screen,
+            scene_input,
+            left_out,
             shaders,
             graphics,
             queue_state: AtomicU8::new(NOT_QUEUED),
+            was_slow: AtomicBool::new(false),
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
-            handed: AtomicBool::new(false),
         }
     }
 
-    fn make(&self) {
-        self.make_with(|| {
-            if let Some(hash) = denied(&self.shaders) {
-                tracing::warn!(hash, shaders = ?self.shaders, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES");
-                return None;
-            }
-            HostPipeline::new(&self.shaders, self.graphics.as_deref())
-        });
+    pub(super) fn key(&self) -> &str {
+        &self.key
     }
 
-    fn make_with(&self, build: impl FnOnce() -> Option<HostPipeline>) {
+    fn make(&self) {
         self.made.get_or_init(|| {
-            // A failed translation must complete this queue entry and wake its waiters.
-            match catch_unwind(AssertUnwindSafe(build)) {
-                Ok(pipeline) => pipeline,
-                Err(_) => {
-                    tracing::warn!(shaders = ?self.shaders, "host pipeline build panicked");
-                    None
-                }
-            }
+            let began = Instant::now();
+            let made = HostPipeline::new(&self.shaders, self.graphics.as_deref());
+            super::library::note_time(&self.key, began.elapsed().as_millis() as u64);
+            made
         });
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -152,6 +173,12 @@ pub(crate) fn missing(p: &Pending) -> Option<String> {
     }
 }
 
+/// The hashes of the shaders `p` is made of.
+pub(crate) fn hashes(p: &Pending) -> String {
+    let hashes: Vec<&str> = p.shaders.iter().map(|s| s.hash.as_str()).collect();
+    hashes.join("+")
+}
+
 /// Signalled whenever a worker has made a pipeline.
 static DONE: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 
@@ -168,6 +195,21 @@ fn wait_budget() -> Duration {
     })
 }
 
+/// As [`wait_budget`], for passes over the screen (`VICTORY_SCREEN_WAIT_MS`,
+/// 10 s; 0: like the others). Below the title's 30 s watchdog.
+fn screen_budget() -> Duration {
+    static BUDGET: OnceLock<Duration> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let millis = std::env::var("VICTORY_SCREEN_WAIT_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(10_000);
+        Duration::from_millis(millis)
+    })
+}
+
+/// Whether passes over the screen go before the others.
+fn screens_first() -> bool {
+    !screen_budget().is_zero()
+}
+
 /// Pipelines queued and not made yet.
 static WAITING: AtomicU64 = AtomicU64::new(0);
 
@@ -179,6 +221,9 @@ pub(crate) fn waiting() -> u64 {
 /// The host pipeline if it is made (or is made within the frame's budget);
 /// queues it on first use.
 pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
+    if p.left_out.is_some() {
+        return None;
+    }
     // A still-pending pipeline was requested by the title too. Prewarm it
     // on the next launch, even if this run never got to use it.
     if !p.used.load(Ordering::Relaxed) && !p.used.swap(true, Ordering::Relaxed) {
@@ -188,86 +233,29 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         start(p, REQUESTED);
         wait(p, crate::frame::current());
     }
-    let made = p.made.get()?.as_ref();
-    // The first time the made pipeline goes to a draw or dispatch: noted
-    // for a device removal's report (one load a call after that).
-    if let Some(host) = made
-        && !p.handed.load(Ordering::Relaxed)
-        && !p.handed.swap(true, Ordering::Relaxed)
-    {
-        crate::host::first_use(&host.name);
-    }
-    made
-}
-
-/// Pipelines made again for the formats bound at a draw, since the start.
-static VARIANTS: AtomicU64 = AtomicU64::new(0);
-
-/// Whether a draw into views of other formats than its pipeline declares
-/// gets a host pipeline for those formats ([`for_formats`]). On by
-/// default; `VICTORY_TARGET_VARIANTS=0` sends such a draw to the host with
-/// the title's pipeline, as before.
-fn variants_on() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_TARGET_VARIANTS").is_none_or(|v| v != "0"))
-}
-
-/// The host pipeline for a draw with `p` into views of the formats
-/// `bound`, which `p` does not declare (`host::formats_differ`): that of
-/// the same shaders and state for those formats. It is a pipeline like the
-/// title's own: queued at its first draw, made by a worker, waited for
-/// within the frame's budget, and the draw is dropped while it is not
-/// there ([`ready`]).
-#[cold]
-pub(crate) fn for_formats<'a>(p: &'a Arc<Pending>, bound: &TargetFormats) -> Option<&'a HostPipeline> {
-    match p.graphics.as_deref() {
-        Some(g) if variants_on() => ready(variant(p, g, &super::host::formats_for(&p.formats, bound))),
-        _ => ready(p),
-    }
-}
-
-/// The pipeline of `p`'s shaders and its state `g` for the formats
-/// `bound`: found in the chain that starts at `p`, or added to it (logged
-/// then: once per pipeline and set of formats).
-fn variant<'a>(p: &'a Arc<Pending>, g: &GraphicsState, bound: &TargetFormats) -> &'a Arc<Pending> {
-    let mut at = p;
-    // (`bound` is what `host::formats_for` gives, and a state made for it
-    // declares exactly it, so the walk ends at the link made for it; the
-    // count is a bound all the same: past it the title's own pipeline.)
-    for _ in 0..64 {
-        let next = at.variant.get_or_init(|| {
-            let so_far = VARIANTS.fetch_add(1, Ordering::Relaxed) + 1;
-            tracing::info!(
-                pipeline = ?p.shaders,
-                declared = ?p.formats,
-                bound = ?bound,
-                so_far,
-                "a pipeline is made again for the render target formats bound at its draw (eight render targets, then depth; VICTORY_TARGET_VARIANTS=0: the draw goes out with the title's pipeline)"
-            );
-            Arc::new(Pending::new(p.shaders.clone(), Some(Box::new(g.with_formats(bound)))))
-        });
-        // (A state made for `bound` declares exactly `bound`.)
-        if next.formats == *bound {
-            return next;
-        }
-        at = next;
-    }
-    p
+    p.made.get()?.as_ref()
 }
 
 /// Makes `p` on this thread if it is not made yet (waiting for a worker
 /// that is making it); whether it has a host pipeline.
 pub(crate) fn now(p: &Arc<Pending>) -> bool {
+    if p.left_out.is_some() {
+        return false;
+    }
     p.make();
     p.made.get().is_some_and(|made| made.is_some())
 }
 
 /// At the title's creation of a pipeline: starts it at once if an earlier
-/// run drew with it (during loading, so the world's first frames find it).
+/// run drew with it (during loading, so the world's first frames find it),
+/// or if it is a confirmed opening-scene / bake producer.
 pub(crate) fn early(p: &Arc<Pending>) {
-    if !p.shaders.is_empty() && super::library::wanted_early(&p.key) {
+    if p.left_out.is_some() {
+        return;
+    }
+    if !p.shaders.is_empty() && (p.scene_input || super::library::wanted_early(&p.key)) {
         super::library::EARLY.fetch_add(1, Ordering::Relaxed);
-        start(p, EARLY);
+        start(p, if p.scene_input { REQUESTED } else { EARLY });
     }
 }
 
@@ -286,16 +274,18 @@ fn shared_budget() -> bool {
 
 /// Waits for `p` while frame `frame` has budget left.
 fn wait(p: &Pending, frame: u64) {
-    let budget = wait_budget();
+    let screen = p.screen && screens_first();
+    let budget = if screen { screen_budget() } else { wait_budget() };
     if budget.is_zero() {
         return;
     }
     // The frame the budget belongs to, and what was waited of it (or is
-    // taken by a thread waiting now).
-    static SPENT: Mutex<(u64, Duration)> = Mutex::new((u64::MAX, Duration::ZERO));
+    // taken by a thread waiting now); of the passes over the screen too.
+    static SPENT: [Mutex<(u64, Duration)>; 2] = [const { Mutex::new((u64::MAX, Duration::ZERO)) }; 2];
+    let spent_of = &SPENT[usize::from(screen)];
     let shared = shared_budget();
     let left = {
-        let mut spent = SPENT.lock().unwrap_or_else(|e| e.into_inner());
+        let mut spent = spent_of.lock().unwrap_or_else(|e| e.into_inner());
         if spent.0 != frame {
             *spent = (frame, Duration::ZERO);
         }
@@ -320,8 +310,16 @@ fn wait(p: &Pending, frame: u64) {
     }
     drop(held);
     let waited = started.elapsed().min(left);
+    if screen && waited > Duration::from_millis(500) {
+        tracing::info!(
+            ms = waited.as_millis() as u64,
+            made = p.made.get().is_some(),
+            shaders = ?p.shaders,
+            "a pass over the screen was waited for (VICTORY_SCREEN_WAIT_MS=0: dropped past half a second a frame)"
+        );
+    }
     {
-        let mut spent = SPENT.lock().unwrap_or_else(|e| e.into_inner());
+        let mut spent = spent_of.lock().unwrap_or_else(|e| e.into_inner());
         // A frame that began meanwhile has its own budget.
         if spent.0 == frame {
             if shared {
@@ -331,7 +329,6 @@ fn wait(p: &Pending, frame: u64) {
             }
         }
     }
-    crate::framelog::add(crate::framelog::T::PipelineWaitUs, started.elapsed().as_micros() as u64);
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(
         crate::copystat::C::PipelineWaitUs,
@@ -344,15 +341,44 @@ const EARLY: u8 = 1;
 const REQUESTED: u8 = 2;
 const MAKING: u8 = 3;
 
+/// How many workers may make pipelines at once that are known to take long
+/// and that no draw has asked for: a quarter of them. On a fresh cache (a
+/// change of the translator or the driver) the early list begins with
+/// programs that take tens of seconds each: all 16 workers were in them
+/// through the whole of the title's loading, 97 pipelines made in 20 s, and
+/// the first minute and a half of the world ran at 0.5 to 1.6 s a frame,
+/// dropping up to 2,900 draws a frame (run shaders-1).
+/// `VICTORY_PIPELINE_SLOW=0`: in the order the title creates them, as before.
+fn slow_limit() -> usize {
+    static LIMIT: OnceLock<usize> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        if std::env::var_os("VICTORY_PIPELINE_SLOW").is_some_and(|v| v == "0") {
+            usize::MAX
+        } else {
+            (worker_count(None, std::thread::available_parallelism().map_or(2, |n| n.get())) / 4).max(1)
+        }
+    })
+}
+
 struct Queue {
+    /// Requested passes over the screen: before all others, and the only ones
+    /// [`SCREEN_WORKERS`] take.
+    screen: VecDeque<Arc<Pending>>,
     early: VecDeque<Arc<Pending>>,
+    /// Those of the early ones known to take long, and how many of them are
+    /// being made ([`slow_limit`]).
+    slow: VecDeque<Arc<Pending>>,
+    slow_now: usize,
     requested: VecDeque<Arc<Pending>>,
 }
 
 impl Queue {
     const fn new() -> Self {
         Self {
+            screen: VecDeque::new(),
             early: VecDeque::new(),
+            slow: VecDeque::new(),
+            slow_now: 0,
             requested: VecDeque::new(),
         }
     }
@@ -360,25 +386,44 @@ impl Queue {
     /// Queues an unrequested pipeline or promotes one queued at creation.
     /// Returns whether it is new to the queue, or `None` if nothing changed.
     fn push(&mut self, p: &Arc<Pending>, priority: u8) -> Option<bool> {
+        self.push_as(p, priority, slow_limit() != usize::MAX && super::library::slow(&p.key))
+    }
+
+    fn push_as(&mut self, p: &Arc<Pending>, priority: u8, slow: bool) -> Option<bool> {
         let prev = p.queue_state.load(Ordering::Relaxed);
         if prev >= priority {
             return None;
         }
         p.queue_state.store(priority, Ordering::Relaxed);
-        if priority == REQUESTED {
+        if priority == REQUESTED && p.screen && screens_first() {
+            self.screen.push_back(p.clone());
+        } else if priority == REQUESTED {
             self.requested.push_back(p.clone());
+        } else if slow {
+            self.slow.push_back(p.clone());
         } else {
             self.early.push_back(p.clone());
         }
         Some(prev == NOT_QUEUED)
     }
 
-    fn pop(&mut self) -> Option<Arc<Pending>> {
-        let p = self.requested.pop_front().or_else(|| {
-            // An early entry can have been promoted and claimed already.
-            std::iter::from_fn(|| self.early.pop_front())
-                .find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
-        })?;
+    fn pop(&mut self, screens_only: bool, slow_limit: usize) -> Option<Arc<Pending>> {
+        // An early entry can have been promoted and claimed already.
+        let unclaimed = |list: &mut VecDeque<Arc<Pending>>| {
+            std::iter::from_fn(|| list.pop_front()).find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
+        };
+        let mut p = self.screen.pop_front();
+        if p.is_none() && !screens_only {
+            p = self.requested.pop_front().or_else(|| unclaimed(&mut self.early));
+            if p.is_none() && self.slow_now < slow_limit {
+                p = unclaimed(&mut self.slow);
+                if let Some(p) = &p {
+                    p.was_slow.store(true, Ordering::Relaxed);
+                    self.slow_now += 1;
+                }
+            }
+        }
+        let p = p?;
         p.queue_state.store(MAKING, Ordering::Relaxed);
         Some(p)
     }
@@ -404,38 +449,77 @@ fn start(p: &Arc<Pending>, priority: u8) {
         if new {
             PEAK.fetch_max(WAITING.fetch_add(1, Ordering::Relaxed) + 1, Ordering::Relaxed);
         }
-        AVAILABLE.notify_one();
+        // (One woken could be a worker that takes passes over the screen
+        // alone: it would leave the pipeline to nobody.)
+        AVAILABLE.notify_all();
     }
 }
 
-fn next() -> Arc<Pending> {
+/// Workers that make passes over the screen alone, besides the others.
+const SCREEN_WORKERS: usize = 2;
+
+fn next(screens_only: bool) -> Arc<Pending> {
     let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
     loop {
-        if let Some(p) = queue.pop() {
+        if let Some(p) = queue.pop(screens_only, slow_limit()) {
             return p;
         }
         queue = AVAILABLE.wait(queue).unwrap_or_else(|e| e.into_inner());
     }
 }
 
-/// Starts the workers (half the logical processors, 2 to 8) on first use.
+/// How many workers make pipelines: `asked` (`VICTORY_PIPELINE_WORKERS`, 1 to
+/// 64), else two thirds of the logical processors, 2 to 16. They run below the
+/// title's own threads, and a cold cache queues hundreds at once.
+fn worker_count(asked: Option<usize>, processors: usize) -> usize {
+    worker_count_for(asked, processors, false)
+}
+
+fn worker_count_for(asked: Option<usize>, processors: usize, limited_ram: bool) -> usize {
+    match asked {
+        Some(n) => n.clamp(1, 64),
+        None if limited_ram => (processors * 3 / 4).clamp(2, 8),
+        None => (processors * 2 / 3).clamp(2, 16),
+    }
+}
+
+/// Starts the workers ([`worker_count`]) on first use.
 fn workers() -> bool {
     static RUNNING: OnceLock<bool> = OnceLock::new();
     *RUNNING.get_or_init(|| {
         let mut running = false;
-        let workers = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 16));
-        for i in 0..workers {
+        let workers = worker_count_for(
+            std::env::var("VICTORY_PIPELINE_WORKERS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
+            std::thread::available_parallelism().map_or(2, |n| n.get()),
+            crate::residency::limited_host_ram(),
+        );
+        tracing::info!(workers, "pipeline workers");
+        let screens = if screens_first() { SCREEN_WORKERS } else { 0 };
+        for i in 0..workers + screens {
+            let screens_only = i >= workers;
             let spawned = std::thread::Builder::new()
                 .name(format!("victory-pipelines-{i}"))
-                .spawn(|| {
-                    // Below the title's own threads (loading, recording).
+                .spawn(move || {
+                    // Below the title's own threads (loading, recording),
+                    // and the streaming one, which is below normal itself
+                    // (`VICTORY_PIPELINE_LOWEST=0`: level with it, as before).
+                    let lowest = !screens_only && std::env::var_os("VICTORY_PIPELINE_LOWEST").is_none_or(|v| v != "0");
                     // SAFETY: a plain call on our own thread.
                     unsafe {
                         use windows::Win32::System::Threading::*;
-                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                        let priority = if lowest { THREAD_PRIORITY_LOWEST } else { THREAD_PRIORITY_BELOW_NORMAL };
+                        let _ = SetThreadPriority(GetCurrentThread(), priority);
                     }
                     loop {
-                        next().make();
+                        let p = next(screens_only);
+                        p.make();
+                        if p.was_slow.load(Ordering::Relaxed) {
+                            let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+                            queue.slow_now -= 1;
+                            AVAILABLE.notify_all();
+                        }
                         if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
                             drained();
                         } else {
@@ -476,21 +560,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_panicking_pipeline_is_refused_and_the_worker_continues() {
-        let bad = Arc::new(Pending::new(Vec::new(), None));
-        let good = Arc::new(Pending::new(Vec::new(), None));
-        let failed = bad.clone();
-        let next = good.clone();
-        let worker = std::thread::spawn(move || {
-            failed.make_with(|| panic!("synthetic pipeline build panic"));
-            next.make_with(|| None);
-        });
-
-        worker.join().expect("the pipeline worker should survive");
-        assert!(matches!(bad.made.get(), Some(None)));
-        assert!(matches!(good.made.get(), Some(None)));
-
-        bad.make_with(|| panic!("the refused pipeline should stay complete"));
+    fn worker_count_follows_the_processors_and_the_switch() {
+        assert_eq!(worker_count(None, 1), 2);
+        assert_eq!(worker_count(None, 24), 16);
+        assert_eq!(worker_count(None, 64), 16);
+        assert_eq!(worker_count(Some(0), 24), 1);
+        assert_eq!(worker_count(Some(20), 24), 20);
+        assert_eq!(worker_count_for(None, 8, true), 6);
+        assert_eq!(worker_count_for(None, 16, true), 8);
+        assert_eq!(worker_count_for(None, 24, true), 8);
+        assert_eq!(worker_count_for(Some(12), 8, true), 12);
     }
 
     /// A first use queues the pipeline and, within the budget, gets the
@@ -505,30 +584,6 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(matches!(p.made.get(), Some(None)));
-    }
-
-    /// A draw into other formats than its pipeline declares finds the
-    /// pipeline for them, which exists once per set of formats and is
-    /// queued by its first draw like any other.
-    #[test]
-    fn a_pipeline_for_bound_formats_is_made_once() {
-        // The title's pipeline declares one render target, format 24.
-        let p = Arc::new(Pending::new(Vec::new(), Some(Box::new(GraphicsState::declaring(24)))));
-        assert_eq!(p.formats, [24, 0, 0, 0, 0, 0, 0, 0, 0]);
-        let g = p.graphics.as_deref().unwrap();
-        let (a, b) = ([26, 0, 0, 0, 0, 0, 0, 0, 0], [28, 0, 0, 0, 0, 0, 0, 0, 0]);
-        let first = variant(&p, g, &a);
-        assert_eq!(first.formats, a);
-        assert_ne!(first.key, p.key);
-        assert!(Arc::ptr_eq(first, variant(&p, g, &a)));
-        let second = variant(&p, g, &b);
-        assert_eq!(second.formats, b);
-        assert!(!Arc::ptr_eq(first, second));
-        assert_ne!(second.key, first.key);
-        assert!(Arc::ptr_eq(first, variant(&p, g, &a)));
-        assert!(Arc::ptr_eq(second, variant(&p, g, &b)));
-        assert_eq!(first.queue_state.load(Ordering::Relaxed), NOT_QUEUED);
-        assert_eq!(p.queue_state.load(Ordering::Relaxed), NOT_QUEUED);
     }
 
     #[test]
@@ -558,10 +613,51 @@ mod tests {
         assert_eq!(queue.push(&promoted, REQUESTED), Some(false));
         assert_eq!(queue.push(&promoted, REQUESTED), None);
 
-        assert!(Arc::ptr_eq(&queue.pop().unwrap(), &requested));
-        assert!(Arc::ptr_eq(&queue.pop().unwrap(), &promoted));
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &requested));
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &promoted));
         assert_eq!(queue.push(&promoted, REQUESTED), None);
-        assert!(Arc::ptr_eq(&queue.pop().unwrap(), &earlier));
-        assert!(queue.pop().is_none());
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &earlier));
+        assert!(queue.pop(false, 1).is_none());
+    }
+
+    #[test]
+    fn pipelines_known_to_take_long_leave_workers_for_the_others() {
+        let new = || Arc::new(Pending::new(Vec::new(), None));
+        let (long, longer, asked, quick) = (new(), new(), new(), new());
+        let mut queue = Queue::new();
+        for p in [&long, &longer, &asked] {
+            assert_eq!(queue.push_as(p, EARLY, true), Some(true));
+        }
+        assert_eq!(queue.push_as(&quick, EARLY, false), Some(true));
+        // The quick one first, then one long one at a time; one a draw asks
+        // for waits for nobody.
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &quick));
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &long));
+        assert!(queue.pop(false, 1).is_none());
+        assert_eq!(queue.push_as(&asked, REQUESTED, true), Some(false));
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &asked));
+        assert!(!asked.was_slow.load(Ordering::Relaxed));
+        assert!(queue.pop(false, 1).is_none());
+        queue.slow_now -= 1;
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &longer));
+        assert!(queue.pop(false, 1).is_none());
+    }
+
+    /// Passes over the screen go before all others, and workers of their own
+    /// take nothing else.
+    #[test]
+    fn passes_over_the_screen_go_first() {
+        let of = |screen| {
+            let mut p = Pending::new(Vec::new(), None);
+            p.screen = screen;
+            Arc::new(p)
+        };
+        let (world, screen) = (of(false), of(true));
+        let mut queue = Queue::new();
+        assert_eq!(queue.push(&world, REQUESTED), Some(true));
+        assert_eq!(queue.push(&screen, REQUESTED), Some(true));
+        assert!(Arc::ptr_eq(&queue.pop(true, 1).unwrap(), &screen));
+        assert!(queue.pop(true, 1).is_none());
+        assert!(Arc::ptr_eq(&queue.pop(false, 1).unwrap(), &world));
     }
 }

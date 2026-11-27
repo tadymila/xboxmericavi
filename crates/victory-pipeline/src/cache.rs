@@ -1,4 +1,5 @@
-use std::io::Write;
+use std::fs::File;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -59,22 +60,7 @@ impl Cache {
         let dir = path.parent().expect("hashed path has a parent");
         std::fs::create_dir_all(dir)?;
         // Write-then-rename so readers never see partial output.
-        let tmp = tempfile_in(dir);
-        // A process killed before it removed its staging file leaves the
-        // name behind, and a later process can get the same id (Windows
-        // reuses process ids) and counter: `create_new` then fails and the
-        // conversion, already done, is lost for the whole run (one shader
-        // never translates). Only the writer reads such a file, and it is
-        // gone, so an existing one is written again.
-        let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&tmp)
-                .with_context(|| format!("reusing the staging file {}", tmp.display()))?,
-            Err(e) => return Err(e.into()),
-        };
+        let (tmp, mut file) = tempfile_in(dir)?;
         let written = file.write_all(&output);
         drop(file);
         let published = written.and_then(|()| std::fs::rename(&tmp, &path));
@@ -86,26 +72,37 @@ impl Cache {
     }
 }
 
-/// Names the staging files: the process id and a counter, which a killed
-/// process can leave behind for a later one to meet ([`get_or_convert`]).
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+fn tempfile_in(dir: &Path) -> io::Result<(PathBuf, File)> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    create_tempfile_in(dir, &COUNTER)
+}
 
-fn tempfile_in(dir: &Path) -> PathBuf {
-    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!(".tmp-{}-{n}", std::process::id()))
+fn create_tempfile_in(dir: &Path, counter: &AtomicU64) -> io::Result<(PathBuf, File)> {
+    // An interrupted writer can leave a file behind, and process IDs are
+    // reused. Keep it intact and try a new name rather than failing a miss.
+    for _ in 0..128 {
+        let n = counter.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!(".tmp-{}-{n}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create a unique cache staging file after 128 attempts",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    /// The tests share the process-wide staging-file counter (and so the
-    /// name the next file gets): one at a time keeps them predictable.
-    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
-        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        ONE.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     struct Upper {
         version: u32,
@@ -127,7 +124,6 @@ mod tests {
 
     #[test]
     fn converts_once_then_hits() {
-        let _one = one_at_a_time();
         let tmp = tempfile::tempdir().unwrap();
         let cache = Cache::open(tmp.path().join("cache")).unwrap();
         let conv = Upper {
@@ -143,7 +139,6 @@ mod tests {
 
     #[test]
     fn failed_publication_removes_the_staging_file() {
-        let _one = one_at_a_time();
         let tmp = tempfile::tempdir().unwrap();
         let cache = Cache::open(tmp.path().join("cache")).unwrap();
         let conv = Upper {
@@ -161,35 +156,67 @@ mod tests {
         );
     }
 
-    /// A staging file a killed process left behind - the next process has
-    /// the same id and counter, which is how the name repeats - does not
-    /// fail the conversion: it is written again and renamed into place.
     #[test]
-    fn a_stale_staging_file_does_not_fail_a_conversion() {
-        let _one = one_at_a_time();
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = Cache::open(tmp.path().join("cache")).unwrap();
-        let conv = Upper {
-            version: 1,
-            runs: AtomicUsize::new(0),
-        };
-        let path = cache.path_for(&CacheKey::new(&conv, b"abc"));
-        let dir = path.parent().unwrap();
-        std::fs::create_dir_all(dir).unwrap();
-        // The name the next staging file gets ([`tempfile_in`]): write a
-        // half-finished one there first, as a killed process would leave it.
-        let stale = dir.join(format!(".tmp-{}-0", std::process::id()));
-        TEMP_COUNTER.store(0, Ordering::Relaxed);
-        std::fs::write(&stale, b"half-written").unwrap();
-        let converted = cache.get_or_convert(&conv, b"abc").unwrap();
-        assert_eq!(converted, path);
-        assert_eq!(std::fs::read(&converted).unwrap(), b"ABC");
-        assert!(!stale.exists(), "the stale staging file is reused");
+    fn staging_retries_collisions_without_changing_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = AtomicU64::new(0);
+        for n in 0..2 {
+            std::fs::write(
+                dir.path().join(format!(".tmp-{}-{n}", std::process::id())),
+                b"stale",
+            )
+            .unwrap();
+        }
+
+        let (path, mut file) = create_tempfile_in(dir.path(), &counter).unwrap();
+        file.write_all(b"fresh").unwrap();
+        drop(file);
+        assert_eq!(
+            path.file_name().unwrap(),
+            format!(".tmp-{}-2", std::process::id()).as_str()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"fresh");
+        for n in 0..2 {
+            assert_eq!(
+                std::fs::read(dir.path().join(format!(".tmp-{}-{n}", std::process::id()))).unwrap(),
+                b"stale"
+            );
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn staging_collision_retries_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = AtomicU64::new(0);
+        for n in 0..128 {
+            std::fs::write(
+                dir.path().join(format!(".tmp-{}-{n}", std::process::id())),
+                b"stale",
+            )
+            .unwrap();
+        }
+
+        let error = create_tempfile_in(dir.path(), &counter).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(counter.load(Ordering::Relaxed), 128);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 128);
+    }
+
+    #[test]
+    fn staging_does_not_retry_other_io_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let counter = AtomicU64::new(0);
+        let missing = dir.path().join("missing");
+
+        let error = create_tempfile_in(&missing, &counter).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        assert!(!missing.exists());
     }
 
     #[test]
     fn version_bump_invalidates() {
-        let _one = one_at_a_time();
         let v1 = Upper {
             version: 1,
             runs: AtomicUsize::new(0),
@@ -203,7 +230,6 @@ mod tests {
 
     #[test]
     fn refuses_cache_inside_repo() {
-        let _one = one_at_a_time();
         let inside = Path::new(env!("CARGO_MANIFEST_DIR")).join("cache");
         assert!(Cache::open(inside).is_err());
     }

@@ -753,7 +753,12 @@ pub(crate) fn nothing_new(start: usize, end: usize, base: usize, copied: &[u64],
         return false;
     };
     (ranged != 0 || taken.iter().all(|&at| at != 0))
-        && j.written.range(first..last).all(|(&page, &write)| write <= taken[page - first].max(ranged))
+        && j.written.range(first..last).all(|(&page, &write)| {
+            // xboxmericavi: a page past the copied run (seen as an index of
+            // 0x8_0000_0003 into 32 pages, 27 Nov) counts as not up to date,
+            // so it is copied again instead of the submitting thread panicking.
+            taken.get(page.wrapping_sub(first)).is_some_and(|&at| write <= at.max(ranged))
+        })
 }
 
 impl Tracked {

@@ -43,6 +43,9 @@ pub mod dxgi;
 pub mod external;
 pub mod fence;
 pub mod frame;
+// xboxmericavi: the frame rate box in the corner (from fxceless/victory-fork).
+mod fpsbox;
+mod stats;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod book;
 #[cfg(windows)]

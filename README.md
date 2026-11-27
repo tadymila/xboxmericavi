@@ -38,11 +38,11 @@ The earlier, victory-fork-based xboxmericavi (4–6 fps on this PC) is in this r
    - **PLAY**. The first build takes a few minutes; the first launch translates the shaders and lets the driver make its pipelines (slow and blurry for a few minutes).
 4. Keyboard works as a pad: WASD move, IJKL camera, Enter = A.
 
-The launcher remembers your path (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.json`). `xboxmericavi.cmd` still works on its own (set `GAME_EXE` or edit the line at their top).
+The launcher remembers your path (`%LOCALAPPDATA%\victory\xboxmericavi-launcher.json`). `tools\play.cmd` still works on its own (set `GAME_EXE` or edit the line at their top).
 
 ## One preset
 
-`xboxmericavi.cmd` (what the launcher's **PLAY** runs): the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), the game on the **Series S** profile (fewer pixels, the fastest), high CPU priority, a log, the console and the live stats window.
+`tools\play.cmd` (what the launcher's **PLAY** runs; **PLAY NOW** runs `tools\playnow.cmd`, the same without a build): the settings of Codec's `Play-VIctory.cmd pareto-residency` (kept in this repository), the game on the **Series S** profile (fewer pixels, the fastest), high CPU priority, a log, the console and the live stats window.
 
 ## What this fork adds
 

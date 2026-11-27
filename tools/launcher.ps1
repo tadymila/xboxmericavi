@@ -209,7 +209,7 @@ if (Test-Path $logPath) {
 }
 
 # The big button.
-$btnStart = FlatButton "PLAY" 20 370 600 64 $pink $pinkHi ([System.Drawing.Color]::White) $pink
+$btnStart = FlatButton "PLAY" 20 370 430 64 $pink $pinkHi ([System.Drawing.Color]::White) $pink
 $btnStart.Font = Font 18 $true
 $btnStart.Add_Click({
     $exe = $txtExe.Text.Trim('"', ' ')
@@ -219,13 +219,33 @@ $btnStart.Add_Click({
     }
     @{ exe = $exe } | ConvertTo-Json | Set-Content $cfgPath
     $env:GAME_EXE = $exe
-    Start-Process -FilePath (Join-Path $root "xboxmericavi.cmd") -WorkingDirectory $root
+    Start-Process -FilePath (Join-Path $root "tools\play.cmd") -WorkingDirectory $root
     $lblStatus.Text = "Building and starting... the first launch after a build is slow for a few minutes."
 })
 $form.Controls.Add($btnStart)
 
+# Start right away with the exe already built (no build, no waiting).
+$btnNow = FlatButton "PLAY NOW`n(no build)" 460 370 160 64 $card $field $fg $pink
+$btnNow.Font = Font 11 $true
+$btnNow.Add_Click({
+    $exe = $txtExe.Text.Trim('"', ' ')
+    if (-not (Test-Path $exe)) {
+        [System.Windows.Forms.MessageBox]::Show("Game executable not found:`n$exe", "xboxmericavi") | Out-Null
+        return
+    }
+    if (-not (Test-Path (Join-Path $root "target\release\victory.exe"))) {
+        [System.Windows.Forms.MessageBox]::Show("No build yet: press PLAY once.", "xboxmericavi") | Out-Null
+        return
+    }
+    @{ exe = $exe } | ConvertTo-Json | Set-Content $cfgPath
+    $env:GAME_EXE = $exe
+    Start-Process -FilePath (Join-Path $root "tools\playnow.cmd") -WorkingDirectory $root
+    $lblStatus.Text = "Starting without a build..."
+})
+$form.Controls.Add($btnNow)
+
 $btnStats = FlatButton "Live stats" 20 480 142 40 $card $field $fg $line
-$btnStats.Add_Click({ Start-Process -FilePath (Join-Path $root "xboxmericavi-stats.cmd") -ArgumentList $logName -WorkingDirectory $root })
+$btnStats.Add_Click({ Start-Process -FilePath (Join-Path $root "tools\stats.cmd") -ArgumentList $logName -WorkingDirectory $root })
 $form.Controls.Add($btnStats)
 $btnCon = FlatButton "Console" 172 480 142 40 $card $field $fg $line
 $btnCon.Add_Click({ Start-Process powershell -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$(Join-Path $root 'tools\console.ps1')`"", "-Log", $logName) })

@@ -6,7 +6,7 @@ rem Series S: the title renders fewer pixels; the fastest.
 rem Set the path to YOUR OWN game executable here (not included in this repo):
 if "%GAME_EXE%"=="" set "GAME_EXE=E:\GTA6.Xbox.v1.0.2.1\game_scarlett_master.exe"
 for %%I in ("%GAME_EXE%") do set "VICTORY_GAME_DIR=%%~dpI"
-cd /d "%~dp0"
+cd /d "%~dp0.."
 set "PATH=%PATH%;%USERPROFILE%\.cargo\bin"
 set "PRESET=xboxmericavi (Series S profile)"
 set VICTORY_TEXTURE_NO_WAIT=1
@@ -38,9 +38,9 @@ cargo build --release --locked -p victory
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 :start
 if not exist "%LOCALAPPDATA%\victory" mkdir "%LOCALAPPDATA%\victory"
-start "xboxmericavi stats" "%~dp0xboxmericavi-stats.cmd" xboxmericavi.log
+start "xboxmericavi stats" "%~dp0stats.cmd" xboxmericavi.log
 rem The console: what the game does right now (frame rate, shaders, pipelines, warnings).
-start "xboxmericavi console" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\console.ps1" -Log xboxmericavi.log
+start "xboxmericavi console" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0console.ps1" -Log xboxmericavi.log
 echo Starting (%PRESET%)... log: %LOCALAPPDATA%\victory\xboxmericavi.log
 rem High CPU priority: the emulator is CPU-bound on 8-thread CPUs.
 start "xboxmericavi" /b /wait /high target\release\victory.exe run "%GAME_EXE%" --console series-s --execute > "%LOCALAPPDATA%\victory\xboxmericavi.log" 2>&1

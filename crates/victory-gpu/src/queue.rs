@@ -666,6 +666,26 @@ struct RetailPlane {
 #[cfg(windows)]
 const _: () = assert!(size_of::<RetailPlane>() == 72);
 
+/// Whether the second plane of a present is shown over the first
+/// (`VICTORY_PLANES=1`, [`crate::compose::on`]). Says once, either way, that
+/// the title presents more than one plane and what the second one is.
+#[cfg(windows)]
+fn planes_seen(planes: u32, parameters: *const Plane) -> bool {
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    let on = crate::compose::on();
+    if !ONCE.swap(true, Ordering::Relaxed) {
+        let second = overlay_resource(parameters);
+        tracing::info!(
+            planes,
+            second = ?second,
+            second_known = second.is_some_and(|r| crate::resource::host_resource(r).is_some()),
+            composed = on,
+            "the title presents more than one plane (VICTORY_PLANES=1: the second is composed over the first)"
+        );
+    }
+    on
+}
+
 #[cfg(windows)]
 fn overlay_resource(parameters: *const Plane) -> Option<This> {
     // Read only the second prefix at the 72-byte retail PresentX stride. A
@@ -837,8 +857,6 @@ impl Written {
             } else {
                 at.cast::<u64>().write_unaligned(value);
             }
-            #[cfg(windows)]
-            windows_sys::Win32::System::Threading::WakeByAddressAll(at.cast());
         }
     }
 }
@@ -987,7 +1005,7 @@ extern "system" fn present(
             })
         };
         let texture = base_res.and_then(take_copy);
-        let overlay = (planes > 1 && !plane_parameters.is_null())
+        let overlay = (planes > 1 && !plane_parameters.is_null() && planes_seen(planes, plane_parameters))
             .then(|| overlay_resource(plane_parameters))
             .flatten()
             .filter(|&over_res| base_res != Some(over_res))
@@ -1018,7 +1036,7 @@ extern "system" fn present(
         const COPY_SOURCE: u32 = 0x800;
         let state = crate::resource::host_transition(resource, COPY_SOURCE)
             .map_or(COPY_SOURCE, |(_, before)| before);
-        let overlay = (planes > 1)
+        let overlay = (planes > 1 && planes_seen(planes, plane_parameters))
             .then(|| overlay_resource(plane_parameters))
             .flatten()
             .filter(|&over_res| over_res != resource)
@@ -1059,6 +1077,18 @@ fn frame_ends() {
             behind::leave();
         }
     });
+    if let Some(on) = crate::ab::pick("VICTORY_LANE_CORE") {
+        static WAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if WAS.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
+            crate::cores::settle();
+        }
+    }
+    if let Some(on) = crate::ab::pick("VICTORY_CACHE_CORES") {
+        static WAS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if WAS.swap(on, std::sync::atomic::Ordering::Relaxed) != on {
+            crate::cores::settle();
+        }
+    }
 }
 
 /// The frame a present shows, and the title's resource it shows.
@@ -1335,7 +1365,7 @@ mod tests {
 
     #[test]
     fn a_pair_of_timestamps_shows_the_load_it_is_given() {
-        let (start, end) = (0xd0419_6698, 0xd0419_6690);
+        let (start, end) = (0xd_0419_6698, 0xd_0419_6690);
         assert_eq!(as_loaded(5_000_000, end, 4_000_000) - as_loaded(5_000_000, start, 4_000_000), 4_000_000);
         assert_eq!(as_loaded(5_000_000, start, 0), 5_000_000);
         assert_eq!(as_loaded(5, start, 100), 1);

@@ -238,7 +238,7 @@ $btnGit.Add_Click({ Start-Process "https://github.com/tadymila/xboxmericavi" })
 $form.Controls.Add($btnGit)
 
 $foot = New-Object System.Windows.Forms.Label
-$foot.Text = "Built on CGBJ (Codec) | VIctory-7900XTX (AvatarManz) | victory-fork | VIctory (Marvisak). GPL-3.0. No game files included."
+$foot.Text = "Built on VIctory-7900XTX (AvatarManz) | CGBJ (Codec) | victory-fork | VIctory (Marvisak). GPL-3.0. No game files included."
 $foot.Location = New-Object System.Drawing.Point(22, 538)
 $foot.Size = New-Object System.Drawing.Size(600, 40)
 $foot.ForeColor = Rgb 110 98 134

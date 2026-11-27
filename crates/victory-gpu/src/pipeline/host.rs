@@ -449,11 +449,8 @@ impl HostPipeline {
         if mesh.is_some() && !host()?.mesh_shaders() {
             return refuse("the host GPU has no mesh shaders (or no shader model 6.6)", shaders);
         }
-        {
-            let _shaders = crate::timeline::span("pipeline: get translated shaders");
-            for (s, _) in &stages {
-                s.translated()?;
-            }
+        for (s, _) in &stages {
+            s.translated()?;
         }
         let host = host()?;
 
@@ -527,6 +524,7 @@ impl HostPipeline {
                         slot == victory_shader::emit::SLOT_FAULTS
                     } else {
                         slot == victory_shader::emit::SLOT_STRIDES
+                            || slot == victory_shader::emit::SLOT_TABLE_STRIDES
                             || slot == victory_shader::emit::SLOT_MEMORY
                     };
                     if (uav || kind == D3D12_ROOT_PARAMETER_TYPE_SRV) && !ours && bounded_root_srvs() {
